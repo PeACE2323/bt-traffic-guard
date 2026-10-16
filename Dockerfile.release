@@ -1,0 +1,50 @@
+# ---------------------------------------------------------------------------
+# 从预编译二进制构建镜像（不依赖 Go 环境）
+#
+# 用途：GitHub Release 里已经提供好 linux/amd64 与 linux/arm64 的静态二进制，
+# 用户下载后用它打包成镜像，无需安装 Go、也无需从源码编译。
+#
+# 用法：
+#   # 1) 下载对应架构的二进制，重命名为 bt-traffic-guard 放在本文件同级目录
+#   curl -L -o bt-traffic-guard \
+#     https://github.com/PeACE2323/bt-traffic-guard/releases/latest/download/bt-traffic-guard-linux-amd64
+#   chmod +x bt-traffic-guard
+#
+#   # 2) 构建镜像
+#   docker build -f Dockerfile.release -t bt-traffic-guard:1.0.0 .
+#
+# 也可以直接指定架构自动下载，见 scripts/build-image.sh
+# ---------------------------------------------------------------------------
+FROM alpine:3.20
+
+# ca-certificates 用于 HTTPS 推送通知（ntfy / webhook）
+# tzdata 用于正确的本地时区与自然日周期边界计算
+RUN apk add --no-cache ca-certificates tzdata wget \
+ && addgroup -g 1000 -S btg \
+ && adduser -u 1000 -S btg -G btg \
+ && mkdir -p /config /data \
+ && chown -R btg:btg /config /data
+
+# 拷贝预编译好的静态二进制
+COPY bt-traffic-guard /usr/local/bin/bt-traffic-guard
+
+# 默认时区，可通过 TZ 环境变量覆盖。
+#
+# 注意：这里刻意不设置 BTG_LISTEN / BTG_DATA_DIR。
+# 环境变量的优先级高于 config.yaml，若在此固化这两个值，
+# 用户在 config.yaml 里修改 listen / data_dir 就会被静默忽略。
+# 二进制的内置默认值同样是 :8080 与 /data，无需重复声明。
+ENV TZ=Asia/Shanghai \
+    BTG_CONFIG=/config/config.yaml
+
+VOLUME ["/config", "/data"]
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8080/api/healthz || exit 1
+
+USER btg
+
+ENTRYPOINT ["/usr/local/bin/bt-traffic-guard"]
+CMD ["-config", "/config/config.yaml"]

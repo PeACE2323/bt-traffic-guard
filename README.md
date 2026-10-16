@@ -25,7 +25,8 @@
 | 热重载 | 改配置即时生效，**不会**丢失当前周期进度与限速状态 |
 | Web 面板 | 实时曲线、客户端明细、策略进度、事件日志、图形化配置 |
 | 通知 | 支持 ntfy、通用 Webhook、Discord、Slack |
-| 预构建镜像 | GitHub Actions 自动发布 amd64/arm64 双架构镜像到 GHCR，直接 `docker pull` |
+| 预编译二进制 | Releases 提供 amd64 / arm64 / armv7 静态二进制，无需 Go 环境即可打包镜像 |
+| 自动构建（规划中） | GitHub Actions 构建双架构镜像到 GHCR，直接 `docker pull`（需先启用，见下文） |
 | 轻量 | 单二进制，约 **7.5 MB** 静态编译，无运行时依赖 |
 | 分族限速 | qBittorrent 4.6+ 支持 IPv4/IPv6 分别限速 |
 
@@ -33,10 +34,67 @@
 
 ## 快速开始（Unraid）
 
-### 方式一：直接拉取预构建镜像（最省事，推荐）
+### 方式一：用预编译二进制一键构建镜像（推荐，无需 Go 环境）
 
-GitHub Actions 会自动构建多架构镜像（amd64 / arm64）并发布到 GHCR，
-**不需要在 NAS 上安装 Go 或 Docker 构建环境**：
+仓库的 [Releases](https://github.com/PeACE2323/bt-traffic-guard/releases/latest)
+里提供了 **amd64 / arm64 / armv7** 三个架构的静态二进制，配套脚本会自动识别架构、
+下载对应文件并打出镜像 —— **不需要安装 Go，也不需要从源码编译**：
+
+```bash
+git clone https://github.com/PeACE2323/bt-traffic-guard.git
+cd bt-traffic-guard
+bash scripts/build-image.sh
+```
+
+脚本跑完会直接给出 `docker run` 命令。然后打开
+`http://<你的Unraid IP>:8080` → **配置** 标签页 →
+填写 qBittorrent / Transmission 的地址与凭据 → 保存，立即生效。
+
+> 也可以手动下载二进制直接用（不用 Docker）：
+> ```bash
+> curl -fL -o bt-traffic-guard \
+>   https://github.com/PeACE2323/bt-traffic-guard/releases/latest/download/bt-traffic-guard-linux-amd64
+> chmod +x bt-traffic-guard && ./bt-traffic-guard -config ./config.yaml
+> ```
+
+### 方式二：手动构建镜像
+
+```bash
+git clone https://github.com/PeACE2323/bt-traffic-guard.git
+cd bt-traffic-guard
+docker build -t bt-traffic-guard:1.0.0 .
+```
+
+国内网络构建慢的话：
+
+```bash
+docker build --build-arg GOPROXY=https://goproxy.cn,direct -t bt-traffic-guard:1.0.0 .
+```
+
+然后启动：
+
+```bash
+docker run -d \
+  --name bt-traffic-guard \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e TZ=Asia/Shanghai \
+  -v /mnt/user/appdata/bt-traffic-guard/config:/config \
+  -v /mnt/user/appdata/bt-traffic-guard/data:/data \
+  bt-traffic-guard:1.0.0
+```
+
+**启动后所有配置都在网页上完成，不需要提前设置任何环境变量。**
+
+### 方式三：从 GHCR 拉取（需先启用 CI，见下文）
+
+仓库内置了 GitHub Actions 配置，推送后会自动构建多架构镜像到 GHCR。
+
+> ⚠️ **当前状态**：workflow 文件因 GitHub 的权限门禁**尚未上传成功**
+> （详见 [镜像构建](#镜像构建github-actions) 一节），因此 GHCR 上暂时还没有镜像。
+> 在启用之前，请使用方式一或方式二。
+
+启用后即可直接拉取：
 
 ```bash
 docker run -d \
@@ -52,16 +110,11 @@ docker run -d \
 > **注意镜像地址必须全小写**：GitHub 网页上是 `PeACE2323`，
 > 但 GHCR 的镜像路径只接受小写，所以是 `ghcr.io/peace2323/...`。
 >
-> 如果拉取时报 `denied` / `unauthorized`：GHCR 的包默认可能是私有可见性。
-> 到 GitHub 的 **你的头像 → Packages → bt-traffic-guard → Package settings**
+> 如果拉取时报 `denied` / `unauthorized`：到 GitHub 的
+> **你的头像 → Packages → bt-traffic-guard → Package settings**
 > 把可见性改成 **Public** 即可匿名拉取。
-> 或者登录一次：`docker login ghcr.io -u PeACE2323`（密码填一个有 `read:packages` 权限的 PAT）。
 
-**启动后所有配置都在网页上完成，不需要提前设置任何环境变量。**
-打开 `http://<你的Unraid IP>:8080` → **配置** 标签页 →
-填写 qBittorrent / Transmission 的地址与凭据 → 保存，立即生效。
-
-### 方式二：Unraid Docker 模板
+### 方式四：Unraid Docker 模板
 
 1. 把本仓库的 `unraid-template.xml` 上传到 Unraid 的
    `/boot/config/plugins/dockerMan/templates-user/`，并重命名为
@@ -93,29 +146,16 @@ docker run -d \
 > 请填 Unraid 的局域网 IP，例如 `http://192.168.1.10:8080`。
 > 若希望用 `127.0.0.1`，请把容器的网络模式改成 **Host**。
 
-### 方式三：docker-compose
+### 方式五：docker-compose
 
 ```bash
 git clone https://github.com/PeACE2323/bt-traffic-guard.git
 cd bt-traffic-guard
-docker compose up -d
+docker compose up -d --build
 ```
 
-默认拉取 GHCR 上的镜像；想从源码构建加 `--build`。
-
-### 方式四：从源码构建镜像
-
-```bash
-git clone https://github.com/PeACE2323/bt-traffic-guard.git
-cd bt-traffic-guard
-docker build -t bt-traffic-guard:1.0.0 .
-```
-
-国内网络构建慢的话：
-
-```bash
-docker build --build-arg GOPROXY=https://goproxy.cn,direct -t bt-traffic-guard:1.0.0 .
-```
+`--build` 会从源码构建（不需要 GHCR 上的镜像）。
+若已启用 CI，去掉 `--build` 就会直接拉取 GHCR 的预构建镜像。
 
 ---
 
@@ -313,7 +353,13 @@ notify:
 
 ## 镜像构建（GitHub Actions）
 
-仓库内置了 [`.github/workflows/build.yml`](.github/workflows/build.yml)：
+> **⚠️ 当前状态：未启用。**
+> `.github/workflows/build.yml` 已写好并在仓库中（本地提交），
+> 但因 GitHub 对 workflow 文件的**独立权限门禁**尚未推送成功，
+> 所以 GHCR 上暂时还没有镜像。**在启用之前请用「方式一」或「方式二」。**
+> 启用方法见本节末尾。
+
+启用后，仓库内置的 [`.github/workflows/build.yml`](.github/workflows/build.yml) 会：
 
 - **推送到 `main`** → 跑测试 → 构建并推送 `:latest` 与 `:main`
 - **打 `v*` 标签**（如 `v1.0.0`）→ 额外推送 `:1.0.0`、`:1.0`、`:1`
@@ -330,6 +376,18 @@ notify:
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
+### 备用分发方式：GitHub Releases
+
+由于上述权限限制，本项目同时提供 **Releases 分发预编译二进制** 的方式（已验证可用）：
+
+- `bt-traffic-guard-linux-amd64` — x86_64 NAS / 服务器
+- `bt-traffic-guard-linux-arm64` — 树莓派 4/5、ARM 群晖、Apple Silicon
+- `bt-traffic-guard-linux-armv7` — 树莓派 3 等 32 位 ARM 设备
+
+配合 [`scripts/build-image.sh`](scripts/build-image.sh) 与
+[`Dockerfile.release`](Dockerfile.release)，用户**无需 Go 环境**即可构建镜像。
+详细用法见上面的「方式一」。
 
 ### 如果 workflow 没有生效 / 推送被拒绝
 
