@@ -116,6 +116,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/client/test", s.wrap(s.handleClientTest))
 	s.mux.HandleFunc("/api/client/limit", s.wrap(s.handleClientLimit))
 	s.mux.HandleFunc("/api/healthz", s.wrap(s.handleHealthz))
+	s.mux.HandleFunc("/api/diagnostics", s.wrap(s.handleDiagnostics))
 }
 
 // ServeHTTP 实现 http.Handler，附加认证与通用响应头。
@@ -446,4 +447,27 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) error {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, err := w.Write([]byte("ok"))
 	return err
+}
+
+// handleDiagnostics 暴露计数器的内部状态，用于排查「周期累计不对」这类问题。
+//
+// 使用方式：浏览器打开 http://<NAS>:8080/api/diagnostics
+// 关注每个客户端的：
+//
+//	window_bytes   —— 计数器里的周期量（真实值）
+//	snapshot_window—— 界面显示的值，应与上一项一致
+//	last_total     —— 客户端自报累计量的基线
+//	has_baseline   —— 是否已建立基线（false 表示还没采到第二轮）
+//	resets         —— 客户端重启次数（累计量归零会 +1）
+func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) error {
+	return writeJSON(w, map[string]any{
+		"monitor":  s.deps.monitor().Diagnostics(),
+		"policies": s.deps.engine().States(),
+		"now":      time.Now(),
+		"server": map[string]any{
+			"started_at": s.deps.StartedAt,
+			"uptime":     time.Since(s.deps.StartedAt).Round(time.Second).String(),
+			"version":    s.deps.Version,
+		},
+	})
 }

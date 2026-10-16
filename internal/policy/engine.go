@@ -580,8 +580,11 @@ func (e *Engine) rollWindow(ctx context.Context, rt *runtime, now, startedAt tim
 	}
 	e.monitor.ResetWindow(names)
 
-	e.logf("info", "策略 %q 进入新周期（%s → %s），已重置累计流量",
-		rt.cfg.Name, oldEnd.In(loc).Format("01-02 15:04:05"), newEnd.In(loc).Format("01-02 15:04:05"))
+	e.logf("info", "策略 %q 进入新周期（%s → %s），已重置 %d 个客户端的累计流量: %v",
+		rt.cfg.Name,
+		oldEnd.In(loc).Format("01-02 15:04:05"),
+		newEnd.In(loc).Format("01-02 15:04:05"),
+		len(names), names)
 
 	if !rt.limited {
 		return

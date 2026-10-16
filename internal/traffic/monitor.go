@@ -554,6 +554,52 @@ func (m *Monitor) Run(ctx context.Context) {
 // 助手
 // ---------------------------------------------------------------------------
 
+// Diagnostics 返回用于排查「周期累计为何是某个值」的内部状态。
+//
+// 动机：用户反馈「周期累计一直显示历史总量」时，
+// 只看界面无法区分是「周期没滚动」还是「计数器没清零」，
+// 这两者的修复方向完全不同。这里把计数器、快照与基线一并暴露出来，
+// 打开 /api/diagnostics 就能直接定位。
+func (m *Monitor) Diagnostics() map[string]any {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := map[string]any{
+		"poll_count":  m.pollCount,
+		"poll_errors": m.pollErrors,
+		"last_poll":   m.lastPollEnd,
+		"clients":     map[string]any{},
+	}
+
+	per := map[string]any{}
+	for name, fams := range m.counters {
+		entry := map[string]any{}
+		var winSum, totSum int64
+		for fam, c := range fams {
+			entry[string(fam)] = map[string]any{
+				"window_bytes": c.windowBytes,
+				"total_bytes":  c.totalBytes,
+				"last_total":   c.lastTotal,
+				"last_speed":   c.lastSpeed,
+				"has_baseline": c.hasBaseline,
+				"resets":       c.resets,
+			}
+			winSum += c.windowBytes
+			totSum += c.totalBytes
+		}
+		entry["window_sum"] = winSum
+		entry["total_sum"] = totSum
+		// 快照里的值（界面直接读这个）
+		if snap, ok := m.snapshots[name]; ok {
+			entry["snapshot_window"] = snap.TotalWindow()
+			entry["snapshot_up_speed"] = snap.TotalSpeed()
+		}
+		per[name] = entry
+	}
+	out["clients"] = per
+	return out
+}
+
 // integrate 用梯形法估算两次采样之间产生的字节数。
 func integrate(prevSpeed, curSpeed int64, dt time.Duration) int64 {
 	if dt <= 0 {
