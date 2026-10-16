@@ -294,11 +294,15 @@ func (r *Registry) Resolve(names []string) []*Managed {
 
 // Options 是构造客户端所需的参数。
 type Options struct {
-	Name               string
-	Type               string
-	URL                string
-	Username           string
-	Password           string
+	Name     string
+	Type     string
+	URL      string
+	Username string
+	Password string
+	// APIKey 是 qBittorrent v5.2.0+ 的 WebUI API Key（形如 qbt_xxx）。
+	// 非空时使用无状态 Bearer 认证，并忽略 Username / Password。
+	// Transmission 不支持该机制，会被忽略。
+	APIKey             string
 	InsecureSkipVerify bool
 	Timeout            time.Duration
 	UploadLimitIPv4    int64
