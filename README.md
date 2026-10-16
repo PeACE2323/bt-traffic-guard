@@ -16,13 +16,16 @@
 | 功能 | 说明 |
 |---|---|
 | 多客户端 | 同时监控任意数量的 qBittorrent / Transmission 实例 |
+| qBittorrent API Key | 支持 5.2.0+ 的 `Bearer` API Key 认证，也兼容旧版用户名密码，自动选择 |
+| 图形化配置 | 所有配置都能在网页上完成，无需预设环境变量或手写 YAML |
 | IPv4 / IPv6 分开统计 | 两条曲线独立展示，可分别设置阈值与限速 |
 | 自定义周期 | 自然日 / 自然周 / 自然月 / 自然小时 / 滚动窗口 |
 | 自动限速与恢复 | 达阈值即限速，新周期自动恢复；退出容器时也会恢复，绝不把下载器留在限速状态 |
 | 防抖动 | 支持冷却期，避免在阈值附近反复触发/解除 |
 | 热重载 | 改配置即时生效，**不会**丢失当前周期进度与限速状态 |
-| Web 面板 | 实时曲线、客户端明细、策略进度、事件日志、在线编辑配置 |
+| Web 面板 | 实时曲线、客户端明细、策略进度、事件日志、图形化配置 |
 | 通知 | 支持 ntfy、通用 Webhook、Discord、Slack |
+| 预构建镜像 | GitHub Actions 自动发布 amd64/arm64 双架构镜像到 GHCR，直接 `docker pull` |
 | 轻量 | 单二进制，约 **7.5 MB** 静态编译，无运行时依赖 |
 | 分族限速 | qBittorrent 4.6+ 支持 IPv4/IPv6 分别限速 |
 
@@ -30,7 +33,35 @@
 
 ## 快速开始（Unraid）
 
-### 方式一：Unraid Docker 模板（推荐）
+### 方式一：直接拉取预构建镜像（最省事，推荐）
+
+GitHub Actions 会自动构建多架构镜像（amd64 / arm64）并发布到 GHCR，
+**不需要在 NAS 上安装 Go 或 Docker 构建环境**：
+
+```bash
+docker run -d \
+  --name bt-traffic-guard \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e TZ=Asia/Shanghai \
+  -v /mnt/user/appdata/bt-traffic-guard/config:/config \
+  -v /mnt/user/appdata/bt-traffic-guard/data:/data \
+  ghcr.io/peace2323/bt-traffic-guard:latest
+```
+
+> **注意镜像地址必须全小写**：GitHub 网页上是 `PeACE2323`，
+> 但 GHCR 的镜像路径只接受小写，所以是 `ghcr.io/peace2323/...`。
+>
+> 如果拉取时报 `denied` / `unauthorized`：GHCR 的包默认可能是私有可见性。
+> 到 GitHub 的 **你的头像 → Packages → bt-traffic-guard → Package settings**
+> 把可见性改成 **Public** 即可匿名拉取。
+> 或者登录一次：`docker login ghcr.io -u PeACE2323`（密码填一个有 `read:packages` 权限的 PAT）。
+
+**启动后所有配置都在网页上完成，不需要提前设置任何环境变量。**
+打开 `http://<你的Unraid IP>:8080` → **配置** 标签页 →
+填写 qBittorrent / Transmission 的地址与凭据 → 保存，立即生效。
+
+### 方式二：Unraid Docker 模板
 
 1. 把本仓库的 `unraid-template.xml` 上传到 Unraid 的
    `/boot/config/plugins/dockerMan/templates-user/`，并重命名为
@@ -40,7 +71,7 @@
 
 2. 在 **Add Container** 页面的 Template 下拉框中选择 `my-bt-traffic-guard`。
 
-3. 按需填写这几项（其余保持默认即可）：
+3. 通常只需要填这四项，连接信息全部留空即可：
 
    | 字段 | 说明 |
    |---|---|
@@ -48,33 +79,31 @@
    | **配置目录** | 默认 `/mnt/user/appdata/bt-traffic-guard/config` |
    | **数据目录** | 默认 `/mnt/user/appdata/bt-traffic-guard/data` |
    | **时区** | 默认 `Asia/Shanghai`。**务必设置正确**，它决定「自然日」从几点开始算 |
-   | **qBittorrent 地址** | 例如 `http://192.168.1.10:8080` |
-   | **qBittorrent 用户名 / 密码** | 你的 WebUI 登录凭据 |
-   | **Transmission 地址** | 例如 `http://192.168.1.10:9091` |
-   | **面板访问密码** | 可选，设置后开启 Web 认证 |
 
 4. 点击 **Apply** 启动容器。
 
-5. 浏览器打开 `http://<你的Unraid IP>:8080` 即可看到面板。
+5. 浏览器打开 `http://<你的Unraid IP>:8080`，在 **配置** 页填写下载器信息。
+
+> 模板里保留了几个可选的环境变量（如 `BTG_QBITTORRENT_URL`）。
+> 它们只在你想「用环境变量强制覆盖配置文件」时才需要填，
+> 平时留空即可——留空时以网页/`config.yaml` 里的设置为准。
 
 > ⚠️ **关于地址填写**：如果容器使用 bridge 网络（Unraid 默认），
 > qBittorrent 地址**不能填 `127.0.0.1`**，因为那是容器自己的回环地址。
 > 请填 Unraid 的局域网 IP，例如 `http://192.168.1.10:8080`。
 > 若希望用 `127.0.0.1`，请把容器的网络模式改成 **Host**。
 
-### 方式二：docker-compose
+### 方式三：docker-compose
 
 ```bash
 git clone https://github.com/PeACE2323/bt-traffic-guard.git
 cd bt-traffic-guard
-docker compose up -d --build
+docker compose up -d
 ```
 
-默认把配置放在 `./config`、数据放在 `./data`，并映射 `8080` 端口。
+默认拉取 GHCR 上的镜像；想从源码构建加 `--build`。
 
-### 方式三：docker run
-
-先克隆并构建镜像：
+### 方式四：从源码构建镜像
 
 ```bash
 git clone https://github.com/PeACE2323/bt-traffic-guard.git
@@ -82,25 +111,11 @@ cd bt-traffic-guard
 docker build -t bt-traffic-guard:1.0.0 .
 ```
 
-然后启动容器：
+国内网络构建慢的话：
 
 ```bash
-docker run -d \
-  --name bt-traffic-guard \
-  --restart unless-stopped \
-  -p 8080:8080 \
-  -e TZ=Asia/Shanghai \
-  -e BTG_QBITTORRENT_URL=http://192.168.1.10:8080 \
-  -e BTG_QBITTORRENT_USERNAME=admin \
-  -e BTG_QBITTORRENT_PASSWORD=adminadmin \
-  -e BTG_TRANSMISSION_URL=http://192.168.1.10:9091 \
-  -v /mnt/user/appdata/bt-traffic-guard/config:/config \
-  -v /mnt/user/appdata/bt-traffic-guard/data:/data \
-  bt-traffic-guard:1.0.0
+docker build --build-arg GOPROXY=https://goproxy.cn,direct -t bt-traffic-guard:1.0.0 .
 ```
-
-> 国内网络构建慢的话，把构建命令换成：
-> `docker build --build-arg GOPROXY=https://goproxy.cn,direct -t bt-traffic-guard:1.0.0 .`
 
 ---
 
@@ -131,8 +146,10 @@ clients:
   - name: qbittorrent
     type: qbittorrent
     url: "http://192.168.1.10:8080"
-    username: "admin"
-    password: "adminadmin"
+    # 二选一：API Key（5.2.0+）或用户名密码
+    api_key: "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    # username: "admin"
+    # password: "adminadmin"
 
 policies:
   - name: daily-500g
@@ -140,10 +157,38 @@ policies:
     window: 24h
     align: day            # 自然日，每天 00:00 重置
     threshold_total: 500GiB
-    limit_total: 1048576  # 限速到 1 MiB/s
+    limit_total: 1MiB     # 限速到 1 MiB/s
     resume_on_window_reset: true
     cooldown: 10m         # 触发后至少保持 10 分钟
 ```
+
+### qBittorrent 认证：API Key 与用户名密码
+
+qBittorrent 从 **v5.2.0** 起引入了 WebUI API Key，本项目两种方式都支持，**填了 API Key 就优先用它**。
+
+| | API Key | 用户名密码 |
+|---|---|---|
+| 最低版本 | 5.2.0 | 任意 |
+| 机制 | `Authorization: Bearer qbt_xxx`，无状态 | `POST /api/v2/auth/login` 换 Cookie |
+| 失败处理 | Key 无效直接报错 | 连续失败会**触发 IP 临时封禁** |
+| 获取方式 | 设置 → WebUI → API Key → 生成 | 你设置的 WebUI 账号 |
+
+API Key 的格式为 `qbt_` 加 28 位随机字符。生成后填到配置的 `api_key` 字段即可：
+
+```yaml
+clients:
+  - name: qbittorrent
+    type: qbittorrent
+    url: "http://192.168.1.10:8080"
+    api_key: "qbt_abcdefghijklmnopqrstuvwxyz1234"
+```
+
+> - 使用 API Key 时**不会**再调用登录/登出接口（官方明确 API Key 不能用于 `auth` 端点），
+>   因此不会因为反复登录而被封 IP。
+> - 如果填了 API Key 但 qBittorrent 版本低于 5.2.0，启动时日志会给出明确警告。
+> - Key 被轮换后旧 Key 立即失效，此时日志会提示「API Key 无效或已被轮换」，
+>   到面板里换一个新的即可。
+> - **Transmission 不支持 API Key**，只能用用户名密码（RPC 基本认证）。
 
 ### 周期对齐方式 `align`
 
@@ -221,15 +266,31 @@ notify:
 - **总览** — 实时上传速度曲线（IPv4 / IPv6 分色）、周期累计进度、限速状态、客户端明细表
 - **策略** — 每条策略的周期进度、阈值、当前累计量，可手动「解除限速」或「测试限速」
 - **事件日志** — 每次触发/解除/失败都有时间戳与详情
-- **配置** — 在线编辑 YAML，保存即热重载
+- **配置** — 分四个子页：
 
-设置环境变量 `BTG_WEB_PASSWORD` 即可开启 Basic 认证（用户名默认 `admin`，可用 `BTG_WEB_USERNAME` 修改）。
+| 子页 | 能做什么 |
+|---|---|
+| **下载器** | 图形化增删改 qBittorrent / Transmission：名称、类型、地址、API Key 或用户名密码、超时、TLS 跳过校验。可实时看到每个下载器的连接状态与当前速度 |
+| **限速策略** | 图形化增删改策略：周期、对齐方式、阈值（合计 / 仅 IPv4 / 仅 IPv6）、限速值、冷却期、作用对象 |
+| **通用与通知** | 端口、采集间隔、日志级别、时区、面板认证、ntfy 与 Webhook 配置 |
+| **高级（YAML）** | 直接编辑 `config.yaml` 原文，适合批量修改或使用表单未暴露的选项 |
+
+**图形化表单与 YAML 是同一份配置**，两边随时可以互相切换，改动都会同步。
+
+> 安全说明：表单读取接口**绝不回传明文密码或 API Key**，
+> 只返回一个掩码占位与首尾可见的提示串（如 `qbt_abcd…1234`）。
+> 前端原样回传掩码时服务端会沿用已保存的值；
+> 只有你明确点击「清除」或填入新值才会改动。
+
+设置环境变量 `BTG_WEB_PASSWORD` 即可开启 Basic 认证（用户名默认 `admin`，可用 `BTG_WEB_USERNAME` 修改），
+也可以在面板的 **配置 → 通用与通知** 里开启。
 
 ---
 
 ## 环境变量
 
-所有配置项都可以用环境变量覆盖（优先级高于 YAML）：
+**所有配置都可以在网页上完成，环境变量完全是可选的。**
+它们只在你想用环境变量强制覆盖配置文件时才有用（优先级高于 YAML）。
 
 | 变量 | 说明 |
 |---|---|
@@ -239,10 +300,36 @@ notify:
 | `BTG_LOG_LEVEL` | `debug` / `info` / `warn` / `error` |
 | `BTG_POLL_INTERVAL` | 采集间隔，如 `5s` |
 | `BTG_TIMEZONE` | 时区，如 `Asia/Shanghai` |
-| `BTG_QBITTORRENT_URL` / `_USERNAME` / `_PASSWORD` | qBittorrent 连接信息 |
+| `BTG_QBITTORRENT_URL` / `_USERNAME` / `_PASSWORD` / `_API_KEY` | qBittorrent 连接信息 |
 | `BTG_TRANSMISSION_URL` / `_USERNAME` / `_PASSWORD` | Transmission 连接信息 |
 | `BTG_WEB_PASSWORD` / `BTG_WEB_USERNAME` | 面板认证 |
 | `TZ` | 容器时区 |
+
+> ⚠️ 环境变量的优先级**高于** `config.yaml`。
+> 如果你设置了 `BTG_QBITTORRENT_URL`，那么在网页上修改这个地址**不会生效**——
+> 此时需要把环境变量删掉再改。这也是为什么容器默认不设置这些变量。
+
+---
+
+## 镜像构建（GitHub Actions）
+
+仓库内置了 [`.github/workflows/build.yml`](.github/workflows/build.yml)：
+
+- **推送到 `main`** → 跑测试 → 构建并推送 `:latest` 与 `:main`
+- **打 `v*` 标签**（如 `v1.0.0`）→ 额外推送 `:1.0.0`、`:1.0`、`:1`
+- **Pull Request** → 只跑测试与构建验证，不推送
+- **手动触发** → 可自定义标签
+
+每次发布都是 **linux/amd64 + linux/arm64** 双架构，覆盖普通 x86 服务器与 ARM 设备（如树莓派、部分群晖）。
+
+**测试不通过就不会构建镜像**，避免推出去一个坏的版本。
+
+发布一个正式版本的流程：
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
 
 ---
 
@@ -259,6 +346,12 @@ go build -trimpath -ldflags "-s -w" -o bt-traffic-guard ./cmd/bt-traffic-guard
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bt-traffic-guard ./cmd/bt-traffic-guard
+```
+
+跑测试：
+
+```bash
+go test ./...
 ```
 
 ---
@@ -350,6 +443,30 @@ A：把 `limit_total` 设为 `0`（不限速），此时策略仍会记录事件
 A：程序在收到 SIGTERM 时会尝试恢复所有处于限速状态的客户端
 （若为 `docker stop`，请留出默认 10 秒的停止超时）。
 
+**Q：`docker pull ghcr.io/peace2323/bt-traffic-guard:latest` 报 denied？**
+A：GHCR 的包首次发布后可能仍是私有可见性。到 GitHub 的
+**你的头像 → Packages → bt-traffic-guard → Package settings → Change visibility** 改成 Public。
+或者先 `docker login ghcr.io -u PeACE2323`（密码用有 `read:packages` 权限的 PAT）。
+
+**Q：日志报「API Key 无效或已被轮换」？**
+A：在 qBittorrent 里重新生成一个 Key（设置 → WebUI → API Key），
+然后到面板的 **配置 → 下载器** 里把新的 Key 粘贴进去保存。
+注意生成新 Key 会立即使旧 Key 失效。
+
+**Q：日志报「客户端 xxx 不支持 API Key 认证，该功能需要 5.2.0 及以上版本」？**
+A：你的 qBittorrent 版本低于 5.2.0，没有 API Key 机制。
+把 `api_key` 清空，改用用户名密码即可（或者在面板里清除 API Key 并填上账号密码）。
+
+**Q：面板上改了地址，但好像没生效？**
+A：检查是否设置了对应的环境变量（如 `BTG_QBITTORRENT_URL`）。
+**环境变量优先级高于配置文件**，如果设置了，网页上的修改会被它覆盖。
+把该环境变量删掉再改即可。容器默认不设置这些变量，就是为了避免这个坑。
+
+**Q：在面板上能改密码吗？会不会把密码显示出来？**
+A：能改，但**不会回显**。表单读取接口只返回掩码和首尾提示串（如 `qbt_abcd…1234`）。
+只要不动那个输入框，保存时就会沿用已保存的值；
+想换新值就直接输入，想彻底清除就点旁边的「清除」按钮。
+
 ---
 
 ## 项目结构
@@ -363,7 +480,8 @@ bt-traffic-guard/
 │   ├── traffic/                      # 流量累计与实时曲线
 │   ├── policy/                       # 限速状态机
 │   ├── notify/                       # ntfy / Webhook 通知
-│   └── web/                          # HTTP 服务与 Web 面板
+│   └── web/                          # HTTP 服务、图形化表单与 Web 面板
+├── .github/workflows/build.yml       # 自动测试并发布镜像到 GHCR
 ├── Dockerfile
 ├── docker-compose.yml
 ├── unraid-template.xml               # Unraid Docker 模板
