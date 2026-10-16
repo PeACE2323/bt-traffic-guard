@@ -40,7 +40,11 @@ type QBittorrent struct {
 	doer     *httpDoer
 	prefsMtx sync.Mutex
 
-	// 登录状态
+	// apiKey 非空时使用 qBittorrent v5.2.0+ 的无状态 Bearer 认证，
+	// 完全跳过登录/登出流程。
+	apiKey string
+
+	// 登录状态（仅在未使用 API Key 时生效）
 	authMtx  sync.Mutex
 	loggedIn bool
 	lastAuth time.Time
@@ -59,10 +63,21 @@ type QBittorrent struct {
 }
 
 // NewQBittorrent 构造 qBittorrent 客户端。
+//
+// 认证方式自动选择：
+//   - opt.APIKey 非空 → 使用 v5.2.0+ 的 Bearer API Key（无状态）
+//   - 否则           → 使用传统的用户名密码登录（Cookie 会话）
 func NewQBittorrent(opt Options) *QBittorrent {
+	apiKey := strings.TrimSpace(opt.APIKey)
+	doer := newHTTPDoer(opt.URL, opt.Username, opt.Password, opt.Timeout, opt.InsecureSkipVerify, false)
+	if apiKey != "" {
+		// 挂到 doer 上，使每个请求都带上 Authorization: Bearer <key>。
+		doer.bearer = apiKey
+	}
 	return &QBittorrent{
 		name:        opt.Name,
-		doer:        newHTTPDoer(opt.URL, opt.Username, opt.Password, opt.Timeout, opt.InsecureSkipVerify, false),
+		doer:        doer,
+		apiKey:      apiKey,
 		peerSamples: map[Family]int64{},
 	}
 }
@@ -73,13 +88,33 @@ func (q *QBittorrent) Name() string { return q.name }
 // Type 返回客户端类型。
 func (q *QBittorrent) Type() string { return "qbittorrent" }
 
-// login 执行登录，返回 SID cookie。已登录时直接复用。
+// URL 返回配置中的 WebUI 地址，用于界面展示。
+func (q *QBittorrent) URL() string { return q.doer.base }
+
+// UsesAPIKey 返回本客户端是否使用 API Key 认证。
+func (q *QBittorrent) UsesAPIKey() bool { return q.apiKey != "" }
+
+// login 执行登录以获取 SID cookie。
+//
+// 使用 API Key 时本方法不做任何事——API Key 是无状态认证，
+// 官方明确说明其不能用于 auth/login 与 auth/logout 端点。
 func (q *QBittorrent) login(ctx context.Context) error {
+	if q.apiKey != "" {
+		return nil
+	}
+
 	q.authMtx.Lock()
 	defer q.authMtx.Unlock()
 
 	if q.loggedIn && time.Since(q.lastAuth) < 20*time.Minute {
 		return nil
+	}
+
+	// 既没有 API Key 也没有账号密码：直接给出可操作的提示，
+	// 而不是发一个必然失败的登录请求再报 HTTP 401。
+	if q.doer.user == "" && q.doer.pass == "" {
+		return fmt.Errorf("客户端 %s 未配置认证信息：请在 WebUI 的「配置 → 下载器」中填写 "+
+			"API Key（qBittorrent 5.2.0+）或用户名密码", q.name)
 	}
 
 	form := url.Values{}
@@ -94,6 +129,11 @@ func (q *QBittorrent) login(ctx context.Context) error {
 	}
 	if code == 403 {
 		return fmt.Errorf("登录 qBittorrent 被拒绝（HTTP 403）：连续失败次数过多，请在 WebUI 中解除 IP 封禁，或检查账号密码")
+	}
+	if code == 401 {
+		return fmt.Errorf("登录 qBittorrent 失败（HTTP 401）：用户名或密码不正确。" +
+			"若你的 qBittorrent 是 5.2.0 及以上版本，建议改用 API Key 认证（设置 → WebUI → API Key），" +
+			"可避免反复登录触发 IP 封禁")
 	}
 	if code != 200 {
 		return statusError("登录 qBittorrent", code, data)
@@ -132,6 +172,12 @@ func (q *QBittorrent) apiGet(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 	if code == 403 || code == 401 {
+		// 使用 API Key 时不存在「重新登录」这一步，
+		// 401/403 只能说明 Key 无效或权限不足，直接给出明确提示。
+		if q.apiKey != "" {
+			return nil, fmt.Errorf("qBittorrent 拒绝访问（HTTP %d）：API Key 无效或已被轮换。"+
+				"请在 qBittorrent 的「设置 → WebUI → API Key」中重新生成，并更新本工具的配置", code)
+		}
 		q.invalidateAuth()
 		if err := q.login(ctx); err != nil {
 			return nil, err
@@ -157,6 +203,10 @@ func (q *QBittorrent) apiPost(ctx context.Context, path string, form url.Values)
 		return nil, err
 	}
 	if code == 403 || code == 401 {
+		if q.apiKey != "" {
+			return nil, fmt.Errorf("qBittorrent 拒绝访问（HTTP %d）：API Key 无效或已被轮换。"+
+				"请在 qBittorrent 的「设置 → WebUI → API Key」中重新生成，并更新本工具的配置", code)
+		}
 		q.invalidateAuth()
 		if err := q.login(ctx); err != nil {
 			return nil, err
@@ -208,6 +258,32 @@ func (q *QBittorrent) supportsFamilyLimit(ctx context.Context) bool {
 		return false
 	}
 	return versionAtLeast(v, 4, 6, 0)
+}
+
+// CheckAuthOnStartup 在启动阶段做一次认证能力自检，返回可供日志输出的提示。
+//
+// 主要覆盖两种容易踩坑的情况：
+//   - 填了 API Key 但 qBittorrent 版本低于 5.2.0（该版本没有这个机制）
+//   - 只填了用户名密码，但客户端已升级到 5.2.0+ 且启用了 API Key 认证
+//
+// 返回的字符串为空表示一切正常；否则是可读的警告信息。
+// 本方法不返回错误，因为它只用于提示，不应阻断启动。
+func (q *QBittorrent) CheckAuthOnStartup(ctx context.Context) string {
+	v := q.detectVersion(ctx)
+	if v == "" {
+		// 版本都取不到，说明连不通或认证失败，交给常规错误路径处理。
+		return ""
+	}
+
+	const apiKeySinceMaj, apiKeySinceMin = 5, 2
+	hasAPIKeySupport := versionAtLeast(v, apiKeySinceMaj, apiKeySinceMin, 0)
+
+	if q.apiKey != "" && !hasAPIKeySupport {
+		return fmt.Sprintf("客户端 %s（qBittorrent %s）不支持 API Key 认证，"+
+			"该功能需要 5.2.0 及以上版本。请改用用户名密码，或升级 qBittorrent。",
+			q.name, v)
+	}
+	return ""
 }
 
 // versionAtLeast 比较语义化版本号，判断 v >= (maj,min,pat)。
@@ -285,6 +361,7 @@ func (q *QBittorrent) Fetch(ctx context.Context) (Stats, error) {
 	var info transferInfo
 	var md mainData
 	var infoOK, mdOK bool
+	var infoErr error
 
 	if err := retry(ctx, 2, 300*time.Millisecond, func() error {
 		data, err := q.apiGet(ctx, "/api/v2/transfer/info")
@@ -294,6 +371,8 @@ func (q *QBittorrent) Fetch(ctx context.Context) (Stats, error) {
 		return json.Unmarshal(data, &info)
 	}); err == nil {
 		infoOK = true
+	} else {
+		infoErr = err
 	}
 
 	// maindata 提供 peer 明细，用于地址族归因；失败不影响主流程。
@@ -304,6 +383,11 @@ func (q *QBittorrent) Fetch(ctx context.Context) (Stats, error) {
 	}
 
 	if !infoOK && !mdOK {
+		// 尽量把底层原因透出来。认证类错误（Key 无效 / 密码错误）
+		// 是最常见的失败原因，直接吞掉会让用户排查困难。
+		if infoErr != nil {
+			return Stats{}, fmt.Errorf("无法获取 qBittorrent 传输信息：%w", infoErr)
+		}
 		return Stats{}, fmt.Errorf("无法获取 qBittorrent 传输信息（transfer/info 与 sync/maindata 均失败）")
 	}
 
