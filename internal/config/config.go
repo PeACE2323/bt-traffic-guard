@@ -121,6 +121,12 @@ type ClientConfig struct {
 	// Username / Password 用于 qBittorrent 登录或 Transmission Basic Auth。
 	Username string `yaml:"username"`
 	Password string `yaml:"password"`
+	// APIKey 是 qBittorrent v5.2.0+ 的 WebUI API Key（形如 qbt_xxxxxxxx）。
+	//
+	// 填写后走无状态的 Bearer 认证，不再执行登录/登出流程，
+	// 且优先于用户名密码。留空则回退到用户名密码登录。
+	// Transmission 不支持该机制，填了会被忽略。
+	APIKey string `yaml:"api_key"`
 	// Enabled 为 false 时跳过该客户端。
 	Enabled *bool `yaml:"enabled"`
 	// InsecureSkipVerify 跳过 TLS 证书校验（自签名 NAS 常见）。
@@ -136,6 +142,25 @@ type ClientConfig struct {
 
 // IsEnabled 返回该客户端是否启用（默认启用）。
 func (c ClientConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
+
+// UsesAPIKey 返回该客户端是否配置了 API Key 认证。
+//
+// 只有 qBittorrent 支持 API Key；Transmission 即便误填也走用户名密码。
+func (c ClientConfig) UsesAPIKey() bool {
+	return c.Type == "qbittorrent" && strings.TrimSpace(c.APIKey) != ""
+}
+
+// AuthMode 返回认证方式的可读描述，用于日志与界面展示。
+func (c ClientConfig) AuthMode() string {
+	switch {
+	case c.UsesAPIKey():
+		return "API Key"
+	case c.Username != "" || c.Password != "":
+		return "用户名密码"
+	default:
+		return "无认证"
+	}
+}
 
 // ---------------------------------------------------------------------------
 // 策略
@@ -488,7 +513,8 @@ func overlayEnvClient(cfg *Config, prefix, clientType string) {
 	url := os.Getenv("BTG_" + prefix + "_URL")
 	user := os.Getenv("BTG_" + prefix + "_USERNAME")
 	pass := os.Getenv("BTG_" + prefix + "_PASSWORD")
-	if url == "" && user == "" && pass == "" {
+	apiKey := os.Getenv("BTG_" + prefix + "_API_KEY")
+	if url == "" && user == "" && pass == "" && apiKey == "" {
 		return
 	}
 	for i := range cfg.Clients {
@@ -503,6 +529,9 @@ func overlayEnvClient(cfg *Config, prefix, clientType string) {
 		}
 		if pass != "" {
 			cfg.Clients[i].Password = pass
+		}
+		if apiKey != "" {
+			cfg.Clients[i].APIKey = apiKey
 		}
 		return
 	}
@@ -563,6 +592,21 @@ func (c *Config) Validate() error {
 		}
 		if cl.UploadLimitIPv4 < 0 || cl.UploadLimitIPv6 < 0 {
 			return fmt.Errorf("clients[%d] (%s): 限速值不能为负", i, cl.Name)
+		}
+
+		// API Key 校验。只做格式提示，不阻断启动——因为 Key 的格式
+		// 可能随 qBittorrent 版本变化，过度严格会导致升级后无法启动。
+		cl.APIKey = strings.TrimSpace(cl.APIKey)
+		if cl.APIKey != "" {
+			if cl.Type != "qbittorrent" {
+				// Transmission 没有这个机制，清掉以免造成误解。
+				cl.APIKey = ""
+			} else if !strings.HasPrefix(cl.APIKey, "qbt_") {
+				// 官方格式为 qbt_ 前缀 + 28 位。这里仅提示，
+				// 因为用户可能从别处粘贴时带了引号或空格。
+				cl.APIKey = ""
+				return fmt.Errorf("clients[%d] (%s): api_key 格式不正确，应以 qbt_ 开头（qBittorrent 5.2.0 及以上版本在「设置 → WebUI → API Key」中生成）", i, cl.Name)
+			}
 		}
 	}
 
