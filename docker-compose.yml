@@ -1,9 +1,23 @@
-# 默认直接拉取 GitHub Actions 构建好的镜像，无需本地 Go 环境。
-# 想从源码构建：docker compose up -d --build
+# ---------------------------------------------------------------------------
+# docker compose 配置
+#
+# 【重要】GHCR 上的预构建镜像目前尚未发布（CI 尚未启用，原因见 README）。
+# 因此这里默认【从源码构建】，保证 `docker compose up -d` 开箱即用。
+#
+# 两种用法：
+#
+#   1) 直接构建并启动（推荐，现在就能用）
+#        docker compose up -d --build
+#
+#   2) 若你已在本地用 scripts/build-image.sh 打好镜像，
+#      或将来 CI 已启用、可以拉取 GHCR 镜像，则改用：
+#        docker compose up -d
+#      此时会优先使用下面 image 指定的标签（本地已存在则不重新构建）。
+# ---------------------------------------------------------------------------
 services:
   bt-traffic-guard:
-    # GHCR 的镜像路径必须全小写，所以是 peace2323 而不是 PeACE2323
-    image: ghcr.io/peace2323/bt-traffic-guard:latest
+    # 给构建出的镜像起个名字；也用于「先检查本地是否已有」这一步。
+    image: bt-traffic-guard:latest
     build:
       context: .
       args:

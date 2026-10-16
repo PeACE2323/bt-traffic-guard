@@ -44,9 +44,19 @@ fi
 cd "$ROOT"
 
 if [ ! -f "$WF_PATH" ]; then
-  echo "错误：在 $ROOT 下找不到 $WF_PATH" >&2
-  echo "请确认你在本仓库的根目录内执行本脚本。" >&2
-  exit 1
+  # 工作树里没有 workflow 文件时，从随仓库分发的模板副本恢复。
+  # 这样即使它因分支操作被意外删除，也能自动复原。
+  if [ -f "$ROOT/scripts/build.yml.example" ]; then
+    echo "==> 工作树中缺少 $WF_PATH，正在从 scripts/build.yml.example 恢复"
+    mkdir -p "$(dirname "$WF_PATH")"
+    cp "$ROOT/scripts/build.yml.example" "$WF_PATH"
+    echo "    已恢复"
+  else
+    echo "错误：在 $ROOT 下找不到 $WF_PATH" >&2
+    echo "也找不到用于恢复的 scripts/build.yml.example。" >&2
+    echo "请确认你在本仓库的根目录内执行本脚本。" >&2
+    exit 1
+  fi
 fi
 
 echo "==> 仓库根目录: $(pwd)"
