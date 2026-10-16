@@ -50,6 +50,25 @@ run "配置文件校验"        node "$SELF/validate-yaml.cjs" "$ROOT"
 run "构建脚本逻辑校验"    node "$SELF/verify-script-logic.cjs" "$ROOT/.tools"
 run "前端脚本校验"        node "$SELF/test-frontend.cjs" "$ROOT"
 
+# ELF 校验需要已构建的产物（由 build-image.sh 下载，或本地交叉编译得到）
+if [ -f "$ROOT/bt-traffic-guard" ]; then
+  case "$(uname -m)" in
+    x86_64|amd64)  _a=amd64 ;;
+    aarch64|arm64) _a=arm64 ;;
+    armv7l|armv7)  _a=armv7 ;;
+    *)             _a=amd64 ;;
+  esac
+  run "产物 ELF 校验"      node "$SELF/verify-elf.cjs" "$ROOT/bt-traffic-guard:$_a"
+else
+  echo
+  echo "=============================================================="
+  echo "  产物 ELF 校验 —— 已跳过"
+  echo "=============================================================="
+  echo "  未找到 $ROOT/bt-traffic-guard"
+  echo "  可先执行 bash scripts/build-image.sh 下载产物，或手动指定："
+  echo "    node scripts/selftest/verify-elf.cjs <文件路径>:<amd64|arm64|armv7>"
+fi
+
 # 往返测试需要一个运行中的实例。若未提供地址则跳过。
 if [ -n "${BTG_TEST_URL:-}" ]; then
   run "表单往返测试"      node "$SELF/test-roundtrip.cjs" "$BTG_TEST_URL"
