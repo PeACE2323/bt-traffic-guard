@@ -5,11 +5,35 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BT Traffic Guard · 上传流量监控与限速</title>
 <style>
+  /* ---------------------------------------------------------------------
+     主题变量
+     深色为默认；<html data-theme="light"> 时切换到浅色。
+     所有颜色都走变量，切换主题无需改动任何组件样式。
+     --------------------------------------------------------------------- */
   :root{
     --bg:#0b0f17; --panel:#131a26; --panel2:#1a2333; --line:#243044;
     --fg:#e6edf7; --muted:#8698b3; --accent:#4c9aff; --ok:#3fb950;
     --warn:#e3b341; --err:#f85149; --v4:#4c9aff; --v6:#a371f7; --unk:#6e7f96;
     --radius:10px;
+    /* 表单控件与代码块的底色，浅色主题下需要单独调 */
+    --input-bg:#0d131d;
+    --placeholder:#4d5c72;
+    --shadow:0 8px 30px rgba(0,0,0,.5);
+    --header-bg:rgba(11,15,23,.9);
+    --hover-bg:#1f2b3d;
+    --btn-fg:#03121f;
+  }
+  html[data-theme="light"]{
+    --bg:#f4f6fa; --panel:#ffffff; --panel2:#eef2f8; --line:#d8e0ec;
+    --fg:#1a2230; --muted:#5b6b82; --accent:#2563eb; --ok:#1a7f37;
+    --warn:#9a6700; --err:#cf222e;
+    --v4:#2563eb; --v6:#8250df; --unk:#8b98a8;
+    --input-bg:#ffffff;
+    --placeholder:#9aa8bd;
+    --shadow:0 8px 30px rgba(15,23,42,.14);
+    --header-bg:rgba(244,246,250,.92);
+    --hover-bg:#e2e9f4;
+    --btn-fg:#ffffff;
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
@@ -17,11 +41,13 @@
     background:var(--bg); color:var(--fg); font:14px/1.6 -apple-system,BlinkMacSystemFont,
     "Segoe UI","PingFang SC","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
     -webkit-font-smoothing:antialiased;
+    /* 主题切换时做一次短过渡，避免闪一下 */
+    transition:background-color .18s ease, color .18s ease;
   }
   a{color:var(--accent)}
   header{
     position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px;
-    padding:12px 20px; background:rgba(11,15,23,.9); backdrop-filter:blur(10px);
+    padding:12px 20px; background:var(--header-bg); backdrop-filter:blur(10px);
     border-bottom:1px solid var(--line); flex-wrap:wrap;
   }
   header h1{font-size:16px; margin:0; font-weight:600; letter-spacing:.3px}
@@ -44,9 +70,9 @@
     background:var(--panel2); color:var(--fg); border:1px solid var(--line);
     transition:.15s border-color,.15s background
   }
-  button:hover{border-color:var(--accent); background:#1f2b3d}
-  button.primary{background:var(--accent); border-color:var(--accent); color:#03121f; font-weight:600}
-  button.primary:hover{background:#63a9ff}
+  button:hover{border-color:var(--accent); background:var(--hover-bg)}
+  button.primary{background:var(--accent); border-color:var(--accent); color:var(--btn-fg); font-weight:600}
+  button.primary:hover{filter:brightness(1.12)}
   button.danger{border-color:rgba(248,81,73,.5); color:#ff9a94}
   button.danger:hover{background:rgba(248,81,73,.14)}
   button:disabled{opacity:.45; cursor:not-allowed}
@@ -67,7 +93,14 @@
   .sub{color:var(--muted); font-size:12.5px; margin-top:3px}
   .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
   .row+.row{margin-top:7px}
-  .fam{display:flex; align-items:center; gap:7px; font-variant-numeric:tabular-nums}
+  .fam{display:inline-flex; align-items:center; gap:7px; font-variant-numeric:tabular-nums}
+  /* 表格单元格的两行结构：主值 + 次要说明。
+     注意 .cell-sub 里的 .fam 是 inline-flex，会遵循父级 text-align，
+     这样表头（右对齐）与数据就能对齐 —— 之前用 display:flex
+     会让子行强制左对齐，看起来「表头和数据没对齐」。 */
+  .cell-main{font-weight:600}
+  .cell-sub{display:flex; flex-direction:column; align-items:flex-end; gap:1px; margin-top:2px}
+  .cell-sub .fam{justify-content:flex-end}
   .dot{width:8px;height:8px;border-radius:50%;flex:none}
   .dot.v4{background:var(--v4)} .dot.v6{background:var(--v6)} .dot.unk{background:var(--unk)}
   table{width:100%; border-collapse:collapse; font-size:13px}
@@ -91,7 +124,7 @@
   .tab.active{color:var(--accent); border-bottom-color:var(--accent); font-weight:600}
   .view{display:none} .view.active{display:block}
   textarea{
-    width:100%; min-height:520px; background:#0d131d; color:var(--fg);
+    width:100%; min-height:520px; background:var(--input-bg); color:var(--fg);
     border:1px solid var(--line); border-radius:8px; padding:12px;
     font:12.5px/1.55 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
     resize:vertical; tab-size:2
@@ -105,7 +138,7 @@
   .toast{
     position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(80px);
     background:var(--panel2); border:1px solid var(--line); color:var(--fg);
-    padding:11px 20px; border-radius:9px; box-shadow:0 8px 30px rgba(0,0,0,.5);
+    padding:11px 20px; border-radius:9px; box-shadow:var(--shadow);
     opacity:0; transition:.25s; z-index:100; max-width:80vw
   }
   .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
@@ -122,7 +155,7 @@
     border:1px solid var(--line); border-radius:20px; font-size:13px
   }
   .subtab:hover{color:var(--fg); border-color:var(--accent); background:var(--panel)}
-  .subtab.active{color:#03121f; background:var(--accent); border-color:var(--accent); font-weight:600}
+  .subtab.active{color:var(--btn-fg); background:var(--accent); border-color:var(--accent); font-weight:600}
   .subview{display:none} .subview.active{display:block}
 
   .field{margin-bottom:14px}
@@ -131,13 +164,13 @@
   }
   .field input[type=text], .field input[type=password], .field input[type=number],
   .field input:not([type]), .field select, .field textarea{
-    width:100%; background:#0d131d; color:var(--fg); border:1px solid var(--line);
+    width:100%; background:var(--input-bg); color:var(--fg); border:1px solid var(--line);
     border-radius:7px; padding:8px 11px; font:inherit; font-size:13.5px; transition:border-color .15s
   }
   .field input:focus, .field select:focus{
     outline:none; border-color:var(--accent)
   }
-  .field input::placeholder{color:#4d5c72}
+  .field input::placeholder{color:var(--placeholder)}
   .fhint{color:var(--muted); font-size:11.5px; margin-top:4px; line-height:1.6}
   .checkline{display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13.5px; color:var(--fg)}
   .checkline input[type=checkbox]{
@@ -195,6 +228,7 @@
   <span class="badge" id="badge-mode">—</span>
   <div class="spacer"></div>
   <span class="badge" id="badge-uptime">—</span>
+  <button id="btn-theme" title="切换深色 / 浅色主题">🌙 深色</button>
   <button id="btn-refresh" title="立即刷新数据">刷新</button>
 </header>
 
@@ -506,7 +540,20 @@
 const $ = (id) => document.getElementById(id);
 
 const FAM = { ipv4: "IPv4", ipv6: "IPv6", unknown: "未分类" };
-const FAM_COLOR = { ipv4: "#4c9aff", ipv6: "#a371f7", unknown: "#6e7f96" };
+// 图表配色改为从 CSS 变量读取，这样切换主题后重绘即自动适配。
+// 放在函数里而不是常量，是因为变量值会随 data-theme 变化。
+function themeColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name, fallback) => (cs.getPropertyValue(name) || "").trim() || fallback;
+  return {
+    v4: v("--v4", "#4c9aff"),
+    v6: v("--v6", "#a371f7"),
+    unk: v("--unk", "#6e7f96"),
+    grid: v("--line", "#243044"),
+    muted: v("--muted", "#8698b3"),
+    warn: v("--warn", "#e3b341"),
+  };
+}
 
 function fmtBytes(n, digits) {
   if (n === null || n === undefined || isNaN(n)) return "—";
@@ -579,6 +626,8 @@ async function api(path, opts) {
 // ---------------------------------------------------------------------------
 function drawAreaChart(canvas, series, opts) {
   opts = opts || {};
+  // 每次绘制都重新取色，保证切换主题后重绘即自动适配
+  const tc = themeColors();
   const dpr = window.devicePixelRatio || 1;
   const cssW = canvas.clientWidth || 600;
   const cssH = canvas.clientHeight || 170;
@@ -601,7 +650,7 @@ function drawAreaChart(canvas, series, opts) {
   max = max * 1.15;
 
   // 网格
-  ctx.strokeStyle = "rgba(36,48,68,.85)";
+  ctx.strokeStyle = tc.grid;
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const y = padT + (h * i) / 4;
@@ -609,7 +658,7 @@ function drawAreaChart(canvas, series, opts) {
   }
 
   // y 轴标签（最大值与 0）
-  ctx.fillStyle = "#8698b3";
+  ctx.fillStyle = tc.muted;
   ctx.font = "11px -apple-system,Segoe UI,sans-serif";
   ctx.textAlign = "left";
   ctx.fillText(fmtSpeedPlain(max), padL + 4, padT + 10);
@@ -618,7 +667,7 @@ function drawAreaChart(canvas, series, opts) {
 
   const n = Math.max(...series.map(s => s.data.length), 0);
   if (n === 0) {
-    ctx.fillStyle = "#8698b3";
+    ctx.fillStyle = tc.muted;
     ctx.textAlign = "center";
     ctx.fillText("等待数据…", cssW / 2, cssH / 2);
     return;
@@ -657,7 +706,7 @@ function drawAreaChart(canvas, series, opts) {
     const y = yAt(opts.threshold);
     ctx.save();
     ctx.setLineDash([4, 4]);
-    ctx.strokeStyle = "rgba(227,179,65,.75)";
+    ctx.strokeStyle = tc.warn;
     ctx.lineWidth = 1.2;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + w, y); ctx.stroke();
     ctx.restore();
@@ -793,12 +842,12 @@ function renderClientsTable(st) {
         ${!c.healthy && c.last_error ? `<div class="sub" style="margin:2px 0 0;max-width:260px;white-space:normal;color:var(--err)">${esc(c.last_error)}</div>` : ""}
       </td>
       <td class="num">
-        <div style="font-weight:600">${fmtBytes(totalSpeed)}/s</div>
-        <div class="sub" style="margin:0">${famParts.join(" &nbsp; ")}</div>
+        <div class="cell-main">${fmtBytes(totalSpeed)}/s</div>
+        <div class="cell-sub">${famParts.join("")}</div>
       </td>
       <td class="num">
-        <div>${fmtBytes(totalWin)}</div>
-        <div class="sub" style="margin:0">v4 ${fmtBytes(win.ipv4 || 0)} · v6 ${fmtBytes(win.ipv6 || 0)}</div>
+        <div class="cell-main">${fmtBytes(totalWin)}</div>
+        <div class="cell-sub">v4 ${fmtBytes(win.ipv4 || 0)} · v6 ${fmtBytes(win.ipv6 || 0)}</div>
       </td>
       <td class="num">${fmtBytes(c.dl_speed || 0)}/s</td>
       <td class="num">${c.torrents || 0} / ${c.peers || 0}</td>
@@ -973,11 +1022,11 @@ async function fetchHistory(client) {
 
 function renderCharts(samples) {
   const speedSeries = [
-    { color: FAM_COLOR.ipv4, data: samples.map(s => (s.up && s.up.ipv4) || 0) },
-    { color: FAM_COLOR.ipv6, data: samples.map(s => (s.up && s.up.ipv6) || 0) },
+    { color: tc.v4, data: samples.map(s => (s.up && s.up.ipv4) || 0) },
+    { color: tc.v6, data: samples.map(s => (s.up && s.up.ipv6) || 0) },
   ];
   const hasUnknown = samples.some(s => (s.up && s.up.unknown) > 0);
-  if (hasUnknown) speedSeries.push({ color: FAM_COLOR.unknown, data: samples.map(s => (s.up && s.up.unknown) || 0) });
+  if (hasUnknown) speedSeries.push({ color: tc.unk, data: samples.map(s => (s.up && s.up.unknown) || 0) });
 
   drawAreaChart($("chart-speed"), speedSeries, {
     yLabel: samples.length ? fmtSpeedPlain(Math.max(...samples.map(s => {
@@ -1319,6 +1368,7 @@ function policyTemplate() {
     window: "24h", align: "day",
     threshold_total: "500GiB", threshold_ipv4: "", threshold_ipv6: "",
     limit_total: "1MiB", limit_ipv4: "", limit_ipv6: "",
+    resume_limit_total: "", resume_limit_ipv4: "", resume_limit_ipv6: "",
     resume_on_window_reset: true, cooldown: "10m"
   };
 }
@@ -1420,6 +1470,26 @@ function renderPolicyForms() {
         <div class="field">
           <label>限速值：仅 IPv6</label>
           <input data-pf="limit_ipv6" data-idx="${i}" value="${esc(p.limit_ipv6)}" placeholder="留空">
+        </div>
+      </div>
+
+      <div class="grid-fields">
+        <div class="field">
+          <label>解除限速后的速度（全局）</label>
+          <input data-pf="resume_limit_total" data-idx="${i}" value="${esc(p.resume_limit_total)}" placeholder="留空 = 恢复到原限速">
+          <div class="fhint">
+            周期结束后回到的速度，如 <code>5MiB</code>（= 5 MiB/s）。<br>
+            <b>留空</b>：恢复到触发前的原始限速（通常完全不限速）。<br>
+            填 <code>0</code>：显式表示不限速。
+          </div>
+        </div>
+        <div class="field">
+          <label>解除限速后的速度：仅 IPv4</label>
+          <input data-pf="resume_limit_ipv4" data-idx="${i}" value="${esc(p.resume_limit_ipv4)}" placeholder="留空">
+        </div>
+        <div class="field">
+          <label>解除限速后的速度：仅 IPv6</label>
+          <input data-pf="resume_limit_ipv6" data-idx="${i}" value="${esc(p.resume_limit_ipv6)}" placeholder="留空">
         </div>
       </div>
 
@@ -1684,6 +1754,54 @@ $("btn-refresh").addEventListener("click", async () => {
   if (activeView === "evt") await refreshEvents();
   if (activeView === "cfg") await loadFormTab();
   toast("已刷新", "ok");
+});
+
+// ---------------------------------------------------------------------------
+// 主题切换
+// ---------------------------------------------------------------------------
+
+const THEME_KEY = "btg-theme";
+
+// applyTheme 切换 <html data-theme> 并更新按钮文案。
+function applyTheme(theme) {
+  const isLight = theme === "light";
+  if (isLight) {
+    document.documentElement.setAttribute("data-theme", "light");
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+  const btn = $("btn-theme");
+  if (btn) btn.textContent = isLight ? "☀️ 浅色" : "🌙 深色";
+}
+
+// 初始化：优先用用户上次的选择；否则跟随系统偏好。
+(function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (e) { /* 隐私模式 */ }
+
+  if (saved === "light" || saved === "dark") {
+    applyTheme(saved);
+    return;
+  }
+  // 未选择过时跟随系统
+  try {
+    const prefersLight = window.matchMedia &&
+      window.matchMedia("(prefers-color-scheme: light)").matches;
+    applyTheme(prefersLight ? "light" : "dark");
+  } catch (e) {
+    applyTheme("dark");
+  }
+})();
+
+$("btn-theme").addEventListener("click", () => {
+  const isLight = document.documentElement.getAttribute("data-theme") === "light";
+  const next = isLight ? "dark" : "light";
+  applyTheme(next);
+  try { localStorage.setItem(THEME_KEY, next); } catch (e) { /* 忽略 */ }
+  // 图表用 canvas 绘制，颜色取自 CSS 变量，必须重绘
+  if (activeView === "dash") {
+    fetchHistory().then(renderCharts).catch(() => {});
+  }
 });
 
 $("btn-evt-refresh").addEventListener("click", refreshEvents);

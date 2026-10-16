@@ -105,6 +105,12 @@ type policyView struct {
 	LimitIPv4  string `json:"limit_ipv4"`
 	LimitIPv6  string `json:"limit_ipv6"`
 
+	// 解除限速后要下发的速度。
+	// 空字符串表示「未启用」—— 恢复时回到客户端的原始限速。
+	ResumeLimitTotal string `json:"resume_limit_total"`
+	ResumeLimitIPv4  string `json:"resume_limit_ipv4"`
+	ResumeLimitIPv6  string `json:"resume_limit_ipv6"`
+
 	ResumeOnWindowReset bool   `json:"resume_on_window_reset"`
 	Cooldown            string `json:"cooldown"`
 }
@@ -210,6 +216,9 @@ func toView(cfg *config.Config) formConfig {
 			LimitTotal:          formatBitrateField(p.LimTotal()),
 			LimitIPv4:           formatBitrateField(p.LimIPv4()),
 			LimitIPv6:           formatBitrateField(p.LimIPv6()),
+			ResumeLimitTotal:    formatBitrateField(p.ResumeTotal()),
+			ResumeLimitIPv4:     formatBitrateField(p.ResumeIPv4()),
+			ResumeLimitIPv6:     formatBitrateField(p.ResumeIPv6()),
 			ResumeOnWindowReset: p.ShouldResume(),
 			Cooldown:            p.Cooldown.String(),
 		})
@@ -451,6 +460,20 @@ func applyView(cfg *config.Config, v formConfig) error {
 			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv6 限速: " + err.Error()}
 		}
 
+		// 解除限速后的速度：留空表示不启用（回到客户端原始限速）。
+		resTotal, err := parseBitrateLoose(pv.ResumeLimitTotal)
+		if err != nil {
+			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的恢复速度: " + err.Error()}
+		}
+		resV4, err := parseBitrateLoose(pv.ResumeLimitIPv4)
+		if err != nil {
+			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv4 恢复速度: " + err.Error()}
+		}
+		resV6, err := parseBitrateLoose(pv.ResumeLimitIPv6)
+		if err != nil {
+			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv6 恢复速度: " + err.Error()}
+		}
+
 		cooldown := config.Duration(0)
 		if s := strings.TrimSpace(pv.Cooldown); s != "" {
 			d, err := config.ParseDuration(s)
@@ -477,6 +500,9 @@ func applyView(cfg *config.Config, v formConfig) error {
 			LimitTotal:          config.Bitrate(limTotal),
 			LimitIPv4:           config.Bitrate(limV4),
 			LimitIPv6:           config.Bitrate(limV6),
+			ResumeLimitTotal:    config.Bitrate(resTotal),
+			ResumeLimitIPv4:     config.Bitrate(resV4),
+			ResumeLimitIPv6:     config.Bitrate(resV6),
 			ResumeOnWindowReset: boolPtr(pv.ResumeOnWindowReset),
 			Cooldown:            cooldown,
 		})

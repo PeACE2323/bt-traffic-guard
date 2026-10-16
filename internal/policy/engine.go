@@ -603,23 +603,48 @@ func (e *Engine) rollWindow(ctx context.Context, rt *runtime, now, startedAt tim
 	e.resumeLimit(ctx, rt, "进入新周期")
 }
 
-// resumeLimit 恢复目标客户端到原始限速。
+// resumeLimit 解除限速。
+//
+// 默认恢复到客户端的【原始限速】（触发前读到的值，通常是「不限速」）。
+// 若策略配置了 resume_limit_*，则改为下发该自定义速度 ——
+// 典型场景：周期结束后不想立刻全速放开（怕又瞬间冲满额度），
+// 而是先回到一个中间速度。
 func (e *Engine) resumeLimit(ctx context.Context, rt *runtime, reason string) {
 	targets := e.registry.Resolve(rt.cfg.Clients)
 	restored := []string{}
 	failed := []string{}
 	var newLimit int64
 
+	// 配了 resume_limit_* 就使用自定义恢复速度，不再回到原始限速。
+	useCustom := rt.cfg.HasResumeLimit()
+
 	for _, c := range targets {
-		base, ok := rt.baselineLimits[c.Name()]
-		if !ok {
-			base = client.NewUnlimited()
+		var restore client.SpeedLimit
+
+		if useCustom {
+			restore = client.SpeedLimit{
+				Total:     rt.cfg.ResumeTotal(),
+				IPv4:      rt.cfg.ResumeIPv4(),
+				IPv6:      rt.cfg.ResumeIPv6(),
+				UseFamily: rt.cfg.ResumeIPv4() > 0 || rt.cfg.ResumeIPv6() > 0,
+			}
+			// 未配置分族速度时走全局限速路径（-1 表示不改分族值）。
+			if !restore.UseFamily {
+				restore.IPv4 = -1
+				restore.IPv6 = -1
+			}
+		} else {
+			base, ok := rt.baselineLimits[c.Name()]
+			if !ok {
+				base = client.NewUnlimited()
+			}
+			// 基线里 Total 为 -1（未知）时按不限速处理。
+			restore = client.SpeedLimit{Total: base.Total, IPv4: -1, IPv6: -1}
+			if restore.Total < 0 {
+				restore.Total = 0
+			}
 		}
-		// 基线里 Total 为 -1（未知）时按不限速处理。
-		restore := client.SpeedLimit{Total: base.Total, IPv4: -1, IPv6: -1}
-		if restore.Total < 0 {
-			restore.Total = 0
-		}
+
 		if err := c.SetUploadLimit(ctx, restore); err != nil {
 			failed = append(failed, fmt.Sprintf("%s: %v", c.Name(), err))
 			continue

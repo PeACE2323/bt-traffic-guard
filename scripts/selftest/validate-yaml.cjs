@@ -69,13 +69,13 @@ function assert(cond, msg) {
 }
 
 const compose = results['docker-compose.yml']?.raw || '';
-// GHCR 镜像尚未发布，compose 必须默认走本地镜像名，
-// 否则用户执行 docker compose up -d 会因拉不到镜像而失败。
-assert(/image:\s*bt-traffic-guard:/.test(compose),
-  'compose 默认使用本地镜像名（GHCR 镜像尚未发布）');
-assert(/build:/.test(compose), 'compose 包含 build 配置，可一键构建');
-assert(!/^\s{2}image:\s*ghcr\.io/m.test(compose),
-  'compose 未把不存在的 GHCR 镜像设为默认');
+// GHCR 镜像已发布，compose 默认应直接拉取它（用户无需本地构建）。
+assert(/image:\s*ghcr\.io\/peace2323\/bt-traffic-guard:latest/.test(compose),
+  'compose 默认使用已发布的 GHCR 镜像');
+// 镜像名必须全小写，否则 GHCR 拉取会失败
+const composeImage = (compose.match(/image:\s*(\S+)/) || [])[1] || '';
+assert(composeImage === composeImage.toLowerCase(),
+  'compose 的镜像名全小写（GHCR 要求）');
 assert(/TZ:/.test(compose), 'compose 设置了时区');
 assert(/\/config/.test(compose) && /\/data/.test(compose), 'compose 挂载了 /config 与 /data');
 assert(!/^\s{4}BTG_QBITTORRENT_PASSWORD:/m.test(compose),
@@ -101,14 +101,17 @@ assert(/api_key:/.test(cfg), 'config 示例包含 api_key 字段');
 assert(/threshold_total:/.test(cfg), 'config 示例包含阈值字段');
 assert(/limit_total:/.test(cfg), 'config 示例包含限速字段');
 
-// Unraid 模板：同样不能指向尚不存在的 GHCR 镜像
+// Unraid 模板：GHCR 镜像现已发布，模板应指向它，
+// 这样用户安装时无需任何本地构建。
 const tplPath = path.join(ROOT, 'unraid-template.xml');
 if (fs.existsSync(tplPath)) {
   const tpl = fs.readFileSync(tplPath, 'utf8');
-  assert(!/<Repository>ghcr\.io/.test(tpl),
-    'Unraid 模板未指向不存在的 GHCR 镜像');
-  assert(/<Repository>bt-traffic-guard/.test(tpl),
-    'Unraid 模板使用本地镜像名');
+  assert(/<Repository>ghcr\.io\/peace2323\/bt-traffic-guard:latest<\/Repository>/.test(tpl),
+    'Unraid 模板指向已发布的 GHCR 镜像');
+  // GHCR 要求仓库路径全小写，大小写错误会导致拉取失败
+  const repoTag = (tpl.match(/<Repository>([^<]+)<\/Repository>/) || [])[1] || '';
+  assert(repoTag === repoTag.toLowerCase(),
+    'Unraid 模板的镜像名全小写（GHCR 要求）');
 }
 
 console.log('');

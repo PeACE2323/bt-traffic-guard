@@ -124,6 +124,19 @@ policies:
 
     # 进入新周期后是否自动解除限速
     resume_on_window_reset: true
+
+    # --- 解除限速后要下发的速度（字节/秒）---
+    #
+    # 留空 / 省略：恢复到【触发前的原始限速】（通常是完全不限速）。
+    # 填 0      ：显式表示不限速。
+    # 填正值    ：恢复到该速度，例如 5MiB 表示 5 MiB/s。
+    #
+    # 典型用法：周期结束后不想立刻全速放开（怕又瞬间冲满额度），
+    # 而是先回到一个中间速度。
+    # resume_limit_total: 5MiB
+    # resume_limit_ipv4: 0
+    # resume_limit_ipv6: 0
+
     # 触发后至少保持多久才允许解除，避免在阈值附近反复横跳
     cooldown: 10m
 
@@ -137,6 +150,7 @@ policies:
   #   threshold_ipv6: 100GiB
   #   limit_ipv6: 524288        # 512 KiB/s（仅限 IPv6）
   #   resume_on_window_reset: true
+  #   resume_limit_ipv6: 0      # 新周期先不限速（IPv6）
   #   cooldown: 0s
 
   # --- 示例 3：每月 5 TB 的硬性总量 ---
@@ -148,6 +162,7 @@ policies:
   #   threshold_total: 5TiB
   #   limit_total: 262144       # 256 KiB/s
   #   resume_on_window_reset: true
+  #   resume_limit_total: 5MiB  # 新周期先回到 5 MiB/s，避免立刻又冲满
   #   cooldown: 0s
 
 # ---------------------------------------------------------------------------

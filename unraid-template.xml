@@ -3,25 +3,18 @@
   Unraid Docker 模板
 
   ===========================================================================
-  【重要】使用前请先在 Unraid 终端里构建镜像
+  镜像已发布在 GHCR，安装时【无需任何本地构建】
   ===========================================================================
 
-  GHCR 上的预构建镜像目前尚未发布（CI 未启用，原因见 README），
-  所以本模板指向的是【本地镜像名】bt-traffic-guard:latest。
-  直接安装会提示找不到镜像，请先执行下面任一条命令构建：
+    ghcr.io/peace2323/bt-traffic-guard:latest
 
-    # 方式 A：自动下载预编译二进制并打包（不需要 Go 环境，推荐）
-    cd /mnt/user/appdata
+  支持 linux/amd64 与 linux/arm64，匿名可拉取（不需要 docker login）。
+
+  如果你确实想用本地构建的版本，把下方 <Repository> 改成
+  本地镜像名 bt-traffic-guard:latest 并先执行：
+
     git clone https://github.com/PeACE2323/bt-traffic-guard.git
-    cd bt-traffic-guard
-    bash scripts/build-image.sh
-
-    # 方式 B：从源码构建（需要能拉取 golang 镜像）
-    git clone https://github.com/PeACE2323/bt-traffic-guard.git
-    cd bt-traffic-guard
-    docker build -t bt-traffic-guard:latest .
-
-  构建完成后，再通过本模板安装容器即可。
+    cd bt-traffic-guard && bash scripts/build-image.sh
   ===========================================================================
 
   安装方式（任选其一）：
@@ -30,13 +23,19 @@
      然后在 Docker → Add Container 的 Template 下拉框里选择 my-bt-traffic-guard
 
   部署后访问 http://<你的Unraid IP>:8080 即可打开监控面板。
+
+  首次使用提醒：
+  - 默认生成的示例下载器与限速策略都是【禁用】状态，
+    需要在面板「配置」页里确认并手动启用。
+  - 下载器地址不要填 127.0.0.1（容器里那是它自己），
+    bridge 模式下请填 Unraid 的局域网 IP。
+  - 容器时区务必填对，它决定「自然日」从几点开始统计。
 -->
 <Container version="2">
   <Name>bt-traffic-guard</Name>
-  <!-- 本地镜像名。若将来 CI 已启用并发布了 GHCR 镜像，
-       可改成 ghcr.io/peace2323/bt-traffic-guard:latest（注意必须全小写）。 -->
-  <Repository>bt-traffic-guard:latest</Repository>
-  <Registry/>
+  <!-- GHCR 上的预构建镜像。注意镜像名必须全小写。 -->
+  <Repository>ghcr.io/peace2323/bt-traffic-guard:latest</Repository>
+  <Registry>https://github.com/PeACE2323/bt-traffic-guard/pkgs/container/bt-traffic-guard</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>

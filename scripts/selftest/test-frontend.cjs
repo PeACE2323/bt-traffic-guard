@@ -88,6 +88,14 @@ const documentStub = {
   createElement: (tag) => makeEl('created-' + tag),
   addEventListener() {},
   body: makeEl('body'),
+  // 主题切换会读写 <html> 的 data-theme 属性。
+  // 真实浏览器里 documentElement 必然存在，这里补上以免误报。
+  documentElement: {
+    _attrs: {},
+    setAttribute(k, v) { this._attrs[k] = v; },
+    getAttribute(k) { return this._attrs[k] !== undefined ? this._attrs[k] : null; },
+    removeAttribute(k) { delete this._attrs[k]; },
+  },
 };
 
 // 预建常用元素，避免 getElementById 返回 undefined
@@ -122,6 +130,17 @@ const sandbox = {
   setInterval: () => 0,
   setTimeout: (fn) => 0,
   clearTimeout: () => {},
+  // 主题逻辑会用到这两者。
+  // getComputedStyle 返回空串即可 —— themeColors() 内部有 fallback。
+  getComputedStyle: () => ({ getPropertyValue: () => "" }),
+  localStorage: (() => {
+    const store = new Map();
+    return {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => store.set(k, String(v)),
+      removeItem: (k) => store.delete(k),
+    };
+  })(),
   Date, Math, JSON, Number, String, Array, Object, Boolean, Error,
   parseInt, parseFloat, isNaN, encodeURIComponent, decodeURIComponent,
 };

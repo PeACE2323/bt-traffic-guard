@@ -199,6 +199,22 @@ type PolicyConfig struct {
 	// ResumeOnWindowReset 为 true 时，进入新周期自动恢复到客户端原始限速。
 	ResumeOnWindowReset *bool `yaml:"resume_on_window_reset"`
 
+	// --- 解除限速后的速度 ---
+	//
+	// ResumeLimitTotal 指定「解除限速后」要下发的上传限速（字节/秒）。
+	//
+	//	-1（默认）不清零，语义为「恢复到触发前的原始限速」
+	//	 0        完全不限速（显式放开）
+	//	>0       恢复到这个指定速度
+	//
+	// 典型用法：周期结束后不想立刻全速放开（怕又瞬间冲满额度），
+	// 而是回到一个中间速度，例如 5 MiB/s。
+	//
+	// 若设为 >=0，则优先采用它，而不再回到客户端的原始限速。
+	ResumeLimitTotal Bitrate `yaml:"resume_limit_total"`
+	ResumeLimitIPv4  Bitrate `yaml:"resume_limit_ipv4"`
+	ResumeLimitIPv6  Bitrate `yaml:"resume_limit_ipv6"`
+
 	// Cooldown 触发限速后至少保持多久才允许解除，避免临界抖动。
 	Cooldown Duration `yaml:"cooldown"`
 }
@@ -210,6 +226,29 @@ func (p PolicyConfig) IsEnabled() bool { return p.Enabled == nil || *p.Enabled }
 func (p PolicyConfig) ShouldResume() bool {
 	return p.ResumeOnWindowReset == nil || *p.ResumeOnWindowReset
 }
+
+// --- 解除限速后的速度（三态语义）-----------------------------------------
+//
+// 内部统一用 -1 表示「未设置」，因此这几个访问器把 YAML 里
+// 的「缺省」和「显式写 0」区分开：
+//
+//	未写该字段      -> -1（恢复到触发前的原始限速）
+//	写了 0          -> 0 （显式不限速）
+//	写了正值        -> 该值
+//
+// 注意 Bitrate 的零值是 0，无法与「显式写 0」区分，
+// 所以缺省判断必须由调用方（form 层）在解析 YAML 时完成，
+// 这里只做取值与「是否启用自定义恢复速度」的判断。
+
+// HasResumeLimit 返回是否配置了自定义的恢复速度。
+func (p PolicyConfig) HasResumeLimit() bool {
+	return p.ResumeLimitTotal > 0 || p.ResumeLimitIPv4 > 0 || p.ResumeLimitIPv6 > 0
+}
+
+// ResumeTotal / ResumeIPv4 / ResumeIPv6 返回自定义恢复速度。
+func (p PolicyConfig) ResumeTotal() int64 { return int64(p.ResumeLimitTotal) }
+func (p PolicyConfig) ResumeIPv4() int64  { return int64(p.ResumeLimitIPv4) }
+func (p PolicyConfig) ResumeIPv6() int64  { return int64(p.ResumeLimitIPv6) }
 
 // --- 便于调用方使用的 int64 访问器（Bytes / Bitrate 只是 YAML 表现层包装）---
 
