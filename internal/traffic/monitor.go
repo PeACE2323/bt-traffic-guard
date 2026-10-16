@@ -467,22 +467,40 @@ func (m *Monitor) AdoptStateFrom(old *Monitor) {
 }
 
 // ResetWindow 把指定客户端的周期累计清零（进入新周期时调用）。
+//
+// 注意：必须同时把【快照】里的周期量清零，不能只改计数器。
+// 原因：策略引擎判断是否触发限速时读的是 Snapshot().WindowBytes，
+// 而快照要等下一次采样（默认 5 秒）才会刷新。
+// 若只清零计数器，在这段窗口里引擎仍会读到周期开始前的旧值，
+// 可能刚解除限速就立刻又触发，表现为限速反复横跳。
 func (m *Monitor) ResetWindow(names []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(names) == 0 {
-		for _, fams := range m.counters {
-			for _, c := range fams {
-				c.reset()
+
+	resetOne := func(name string, fams map[client.Family]*counter) {
+		for _, c := range fams {
+			c.reset()
+		}
+		// 同步刷新快照，避免引擎读到过期值
+		if snap, ok := m.snapshots[name]; ok {
+			clear := make(map[client.Family]int64, len(snap.WindowBytes))
+			for f := range snap.WindowBytes {
+				clear[f] = 0
 			}
+			snap.WindowBytes = clear
+			m.snapshots[name] = snap
+		}
+	}
+
+	if len(names) == 0 {
+		for name, fams := range m.counters {
+			resetOne(name, fams)
 		}
 		return
 	}
 	for _, n := range names {
 		if fams, ok := m.counters[n]; ok {
-			for _, c := range fams {
-				c.reset()
-			}
+			resetOne(n, fams)
 		}
 	}
 }
