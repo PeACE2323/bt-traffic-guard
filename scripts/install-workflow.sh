@@ -21,12 +21,31 @@ set -euo pipefail
 REPO_URL="https://github.com/PeACE2323/bt-traffic-guard.git"
 WF_PATH=".github/workflows/build.yml"
 
-# 切到仓库根目录（脚本可能在任意位置被调用）
-cd "$(dirname "$0")/.."
+# 定位仓库根目录。
+#
+# 注意：不能用 $(dirname "$0")，因为用户可能通过软链接调用，
+# 或用 `bash /path/to/scripts/install-workflow.sh` 从别处执行。
+# 优先用 git 定位（最可靠），失败时回退到脚本自身位置并解析软链接。
+if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  :
+else
+  script_path="$0"
+  if command -v readlink >/dev/null 2>&1; then
+    while [ -L "$script_path" ]; do
+      target="$(readlink "$script_path")"
+      case "$target" in
+        /*) script_path="$target" ;;
+        *)  script_path="$(dirname "$script_path")/$target" ;;
+      esac
+    done
+  fi
+  ROOT="$(cd "$(dirname "$script_path")/.." && pwd)"
+fi
+cd "$ROOT"
 
 if [ ! -f "$WF_PATH" ]; then
-  echo "错误：找不到 $WF_PATH" >&2
-  echo "请确认你在仓库根目录，且该文件已随仓库一起 clone 下来。" >&2
+  echo "错误：在 $ROOT 下找不到 $WF_PATH" >&2
+  echo "请确认你在本仓库的根目录内执行本脚本。" >&2
   exit 1
 fi
 
