@@ -305,11 +305,24 @@ func (t *Transmission) Fetch(ctx context.Context) (Stats, error) {
 	totalSpeed := stats.UploadSpeed
 	totalData := stats.CumulativeStats.UploadedBytes
 
+	// 说明：Transmission 只提供【不分族】的累计上传量，
+	// 分族数字是按当前 peer 的地址族占比「估算」出来的。
+	//
+	// 这带来一个必须显式标注的重要性质：
+	//   估算值【不是单调递增的计数器】——
+	//   IPv6 peer 断开时，IPv4 那一份会被重新分摊而【变小】。
+	//
+	// 而 monitor 判断「客户端是否重启」的依据正是「上报值是否变小」，
+	// 若不告知它这是估算值，就会被误判为重启，
+	// 随后数值回升时把整段差值当成新增流量，
+	// 每次波动凭空灌入几百 GB（用户实测出现过 2 TB 的虚假累计）。
+	//
+	// 因此这里标记 FamilyTotalEstimated，
+	// 让 monitor 对分族量一律走「速率积分」而非「累计量差值」。
+	st.FamilyTotalEstimated = true
+
 	if v4+v6 > 0 && (v4 > 0 || v6 > 0) {
 		// 有 peer 明细：按连接数占比分摊速度，按占比分摊累计量。
-		if totalSpeed == 0 {
-			totalSpeed = 0
-		}
 		sum := v4 + v6
 		if sum > 0 {
 			sp4 := totalSpeed * v4 / sum

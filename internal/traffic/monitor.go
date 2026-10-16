@@ -234,7 +234,20 @@ func (m *Monitor) PollOnce(ctx context.Context, now time.Time) {
 			}
 
 			delta := int64(0)
-			if cum > 0 {
+			switch {
+			case st.FamilyTotalEstimated:
+				// 分族量是估算值（例如 Transmission 按 peer 占比分摊），
+				// 会随 peer 增减上下跳动，【不是单调计数器】。
+				//
+				// 若沿用「累计量差值」会出大问题：
+				//   某族数值被稀释变小 -> 误判为客户端重启
+				//   -> 下一轮数值回升 -> 把整段差值当成新增流量
+				// 实测每次 peer 波动可灌入数百 GB 虚假流量。
+				//
+				// 因此这类客户端一律用速率积分，虽然精度略低，
+				// 但绝不会产生数量级上的错误。
+				delta = integrate(cnt.lastSpeed, speed, now.Sub(cnt.lastSeen))
+			case cum > 0:
 				if cum >= cnt.lastTotal {
 					// 正常情况：用自报累计量的差值，精确且不受采样抖动影响。
 					delta = cum - cnt.lastTotal
@@ -244,9 +257,12 @@ func (m *Monitor) PollOnce(ctx context.Context, now time.Time) {
 					cnt.resets++
 				}
 				cnt.lastTotal = cum
-			} else {
+			default:
 				// 客户端不提供累计量：只能速率积分。
 				delta = integrate(cnt.lastSpeed, speed, now.Sub(cnt.lastSeen))
+			}
+			if !st.FamilyTotalEstimated {
+				cnt.lastTotal = cum
 			}
 
 			// 防御：单次采样增量不可能超过「峰值速率 × 间隔」的合理上限。

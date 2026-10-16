@@ -40,7 +40,19 @@ type Stats struct {
 	// UpSpeed 是各地址族的上传速度（字节/秒）。
 	UpSpeed map[Family]int64 `json:"up_speed"`
 	// UpTotal 是各地址族自客户端启动以来的累计上传字节数。
+	//
+	// 注意：只有 FamilyTotalEstimated 为 false 时，
+	// 这个映射里的值才是【可信的单调递增计数器】。
 	UpTotal map[Family]int64 `json:"up_total"`
+	// FamilyTotalEstimated 表示 UpTotal 的分族数值是【估算】出来的，
+	// 而非客户端直接提供的计数器。
+	//
+	// 为 true 时（例如 Transmission 按 peer 占比分摊）：
+	// 某族的数值会随 peer 增减而上下跳动，甚至变小。
+	// 调用方【不得】把「数值变小」当作客户端重启，
+	// 也不应使用差值得出增量，否则 peer 每波动一次
+	// 就会灌入巨量虚假流量。
+	FamilyTotalEstimated bool `json:"family_total_estimated,omitempty"`
 	// DlSpeed 是下载速度（字节/秒），仅用于展示。
 	DlSpeed int64 `json:"dl_speed"`
 	// PeerCount / TorrentCount 用于展示与排障。
