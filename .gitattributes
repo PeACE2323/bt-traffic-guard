@@ -1,0 +1,24 @@
+# 统一换行符为 LF，避免在 Windows 上编辑后提交 CRLF
+# 导致 Linux 容器内的脚本/配置出现 \r 问题。
+* text=auto eol=lf
+
+# 明确按文本处理的文件类型
+*.go    text eol=lf
+*.mod   text eol=lf
+*.sum   text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.xml   text eol=lf
+*.md    text eol=lf
+*.html  text eol=lf
+*.css   text eol=lf
+*.js    text eol=lf
+Dockerfile text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# 二进制文件不做任何转换
+*.png binary
+*.jpg binary
+*.ico binary
+*.exe binary

@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BT Traffic Guard · 上传流量监控与限速</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#131a26; --panel2:#1a2333; --line:#243044;
+    --fg:#e6edf7; --muted:#8698b3; --accent:#4c9aff; --ok:#3fb950;
+    --warn:#e3b341; --err:#f85149; --v4:#4c9aff; --v6:#a371f7; --unk:#6e7f96;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--fg); font:14px/1.6 -apple-system,BlinkMacSystemFont,
+    "Segoe UI","PingFang SC","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  a{color:var(--accent)}
+  header{
+    position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:14px;
+    padding:12px 20px; background:rgba(11,15,23,.9); backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line); flex-wrap:wrap;
+  }
+  header h1{font-size:16px; margin:0; font-weight:600; letter-spacing:.3px}
+  header .brand{display:flex; align-items:center; gap:9px}
+  .logo{
+    width:26px;height:26px;border-radius:7px;
+    background:linear-gradient(135deg,var(--v4),var(--v6));
+    display:grid;place-items:center;font-size:14px
+  }
+  .spacer{flex:1}
+  .badge{
+    font-size:12px; padding:3px 9px; border-radius:20px;
+    background:var(--panel2); color:var(--muted); border:1px solid var(--line)
+  }
+  .badge.ok{color:var(--ok); border-color:rgba(63,185,80,.35); background:rgba(63,185,80,.1)}
+  .badge.err{color:var(--err); border-color:rgba(248,81,73,.35); background:rgba(248,81,73,.1)}
+  .badge.warn{color:var(--warn); border-color:rgba(227,179,65,.35); background:rgba(227,179,65,.1)}
+  button{
+    font:inherit; cursor:pointer; border-radius:8px; padding:6px 13px;
+    background:var(--panel2); color:var(--fg); border:1px solid var(--line);
+    transition:.15s border-color,.15s background
+  }
+  button:hover{border-color:var(--accent); background:#1f2b3d}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#03121f; font-weight:600}
+  button.primary:hover{background:#63a9ff}
+  button.danger{border-color:rgba(248,81,73,.5); color:#ff9a94}
+  button.danger:hover{background:rgba(248,81,73,.14)}
+  button:disabled{opacity:.45; cursor:not-allowed}
+  main{padding:18px 20px 60px; max-width:1500px; margin:0 auto}
+  .grid{display:grid; gap:14px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(210px,1fr))}
+  .two{grid-template-columns:repeat(auto-fit,minmax(420px,1fr))}
+  .card{
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:var(--radius); padding:14px 16px
+  }
+  .card h2{
+    margin:0 0 12px; font-size:13px; font-weight:600; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.6px; display:flex; align-items:center; gap:8px
+  }
+  .metric{font-size:26px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.5px}
+  .metric.sm{font-size:19px}
+  .sub{color:var(--muted); font-size:12.5px; margin-top:3px}
+  .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
+  .row+.row{margin-top:7px}
+  .fam{display:flex; align-items:center; gap:7px; font-variant-numeric:tabular-nums}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .dot.v4{background:var(--v4)} .dot.v6{background:var(--v6)} .dot.unk{background:var(--unk)}
+  table{width:100%; border-collapse:collapse; font-size:13px}
+  th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:middle}
+  th{color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px}
+  tr:last-child td{border-bottom:none}
+  td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  .bar{height:6px; border-radius:4px; background:var(--panel2); overflow:hidden; margin-top:6px}
+  .bar>i{display:block; height:100%; border-radius:4px; background:var(--accent); transition:width .4s}
+  .bar>i.v4{background:var(--v4)} .bar>i.v6{background:var(--v6)}
+  .bar>i.warn{background:var(--warn)} .bar>i.err{background:var(--err)}
+  canvas{width:100%; display:block}
+  .legend{display:flex; gap:16px; font-size:12px; color:var(--muted); margin-top:8px; flex-wrap:wrap}
+  .legend span{display:flex; align-items:center; gap:6px}
+  .tabs{display:flex; gap:6px; margin-bottom:14px; border-bottom:1px solid var(--line); flex-wrap:wrap}
+  .tab{
+    padding:8px 15px; cursor:pointer; color:var(--muted); border:none; background:none;
+    border-bottom:2px solid transparent; border-radius:0; margin-bottom:-1px
+  }
+  .tab:hover{color:var(--fg); background:none; border-color:transparent}
+  .tab.active{color:var(--accent); border-bottom-color:var(--accent); font-weight:600}
+  .view{display:none} .view.active{display:block}
+  textarea{
+    width:100%; min-height:520px; background:#0d131d; color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:12px;
+    font:12.5px/1.55 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+    resize:vertical; tab-size:2
+  }
+  .pill{
+    display:inline-block; padding:2px 8px; border-radius:20px; font-size:11.5px;
+    background:var(--panel2); color:var(--muted); border:1px solid var(--line); white-space:nowrap
+  }
+  .pill.on{background:rgba(248,81,73,.14); color:#ff9a94; border-color:rgba(248,81,73,.35)}
+  .pill.off{background:rgba(63,185,80,.12); color:#7ee787; border-color:rgba(63,185,80,.3)}
+  .toast{
+    position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(80px);
+    background:var(--panel2); border:1px solid var(--line); color:var(--fg);
+    padding:11px 20px; border-radius:9px; box-shadow:0 8px 30px rgba(0,0,0,.5);
+    opacity:0; transition:.25s; z-index:100; max-width:80vw
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0)}
+  .toast.err{border-color:rgba(248,81,73,.5)}
+  .toast.ok{border-color:rgba(63,185,80,.5)}
+  .empty{color:var(--muted); padding:26px; text-align:center; font-size:13px}
+  code{background:var(--panel2); padding:1px 6px; border-radius:5px; font-size:12.5px}
+  .hint{color:var(--muted); font-size:12.5px; margin-top:10px; line-height:1.7}
+  .ev{display:flex; gap:11px; padding:9px 0; border-bottom:1px solid var(--line); font-size:13px}
+  .ev:last-child{border-bottom:none}
+  .ev time{color:var(--muted); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums}
+  .ev .txt{flex:1}
+  .spinner{
+    width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--accent);
+    border-radius:50%;display:inline-block;animation:spin .7s linear infinite;vertical-align:-2px
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @media(max-width:640px){
+    main{padding:14px} .metric{font-size:22px} th,td{padding:7px 6px; font-size:12px}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">⏫</div>
+    <h1>BT Traffic Guard</h1>
+  </div>
+  <span class="badge" id="badge-conn">连接中…</span>
+  <span class="badge" id="badge-mode">—</span>
+  <div class="spacer"></div>
+  <span class="badge" id="badge-uptime">—</span>
+  <button id="btn-refresh" title="立即刷新数据">刷新</button>
+</header>
+
+<main>
+  <div class="tabs">
+    <button class="tab active" data-view="dash">总览</button>
+    <button class="tab" data-view="pol">策略</button>
+    <button class="tab" data-view="evt">事件日志</button>
+    <button class="tab" data-view="cfg">配置</button>
+  </div>
+
+  <!-- ================= 总览 ================= -->
+  <section class="view active" id="view-dash">
+    <div class="grid cards" style="margin-bottom:14px">
+      <div class="card">
+        <h2>当前上传速度</h2>
+        <div class="metric" id="m-speed">—</div>
+        <div class="sub" id="m-speed-fam">—</div>
+      </div>
+      <div class="card">
+        <h2>周期累计上传</h2>
+        <div class="metric" id="m-window">—</div>
+        <div class="bar"><i id="m-window-bar" style="width:0%"></i></div>
+        <div class="sub" id="m-window-sub">—</div>
+      </div>
+      <div class="card">
+        <h2>限速状态</h2>
+        <div class="metric" id="m-limit">—</div>
+        <div class="sub" id="m-limit-sub">—</div>
+      </div>
+      <div class="card">
+        <h2>客户端</h2>
+        <div class="metric" id="m-clients">—</div>
+        <div class="sub" id="m-clients-sub">—</div>
+      </div>
+    </div>
+
+    <div class="grid two" style="margin-bottom:14px">
+      <div class="card">
+        <h2>上传速度（实时）</h2>
+        <canvas id="chart-speed" height="170"></canvas>
+        <div class="legend">
+          <span><i class="dot v4"></i>IPv4</span>
+          <span><i class="dot v6"></i>IPv6</span>
+          <span><i class="dot unk"></i>未分类</span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>周期累计流量</h2>
+        <canvas id="chart-cum" height="170"></canvas>
+        <div class="legend">
+          <span><i class="dot v4" style="background:var(--warn)"></i>本周期累计上传</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <h2>客户端明细</h2>
+      <div id="clients-table"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+
+  <!-- ================= 策略 ================= -->
+  <section class="view" id="view-pol">
+    <div id="policies"></div>
+  </section>
+
+  <!-- ================= 事件 ================= -->
+  <section class="view" id="view-evt">
+    <div class="card">
+      <div class="row" style="margin-bottom:8px">
+        <h2 style="margin:0">事件日志</h2>
+        <button id="btn-evt-refresh">刷新</button>
+      </div>
+      <div id="events"><div class="empty">加载中…</div></div>
+    </div>
+  </section>
+
+  <!-- ================= 配置 ================= -->
+  <section class="view" id="view-cfg">
+    <div class="card">
+      <div class="row" style="margin-bottom:12px">
+        <h2 style="margin:0">配置文件（YAML）</h2>
+        <div style="display:flex; gap:8px">
+          <button id="btn-cfg-reload">重新载入</button>
+          <button class="primary" id="btn-cfg-save">保存并应用</button>
+        </div>
+      </div>
+      <textarea id="cfg-text" spellcheck="false"></textarea>
+      <div class="hint">
+        保存后会立即热重载，无需重启容器。修改 <code>poll_interval</code>、阈值、限速值都会即时生效。<br>
+        阈值与限速均可使用友好写法：阈值如 <code>500GiB</code>、<code>1.5TB</code>；限速单位是<strong>字节/秒</strong>（如 <code>1048576</code> = 1 MiB/s，<code>0</code> = 不限速）。<br>
+        周期 <code>window</code> 支持 <code>24h</code> / <code>7d</code> / <code>30d</code>；<code>align</code> 可选 <code>day</code>（自然日）、<code>week</code>、<code>month</code>、<code>hour</code> 或 <code>rolling</code>（滚动窗口）。
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// 工具函数
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+
+const FAM = { ipv4: "IPv4", ipv6: "IPv6", unknown: "未分类" };
+const FAM_COLOR = { ipv4: "#4c9aff", ipv6: "#a371f7", unknown: "#6e7f96" };
+
+function fmtBytes(n, digits) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  n = Number(n);
+  const neg = n < 0;
+  n = Math.abs(n);
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  const d = digits === undefined ? (i === 0 ? 0 : 2) : digits;
+  return (neg ? "-" : "") + n.toFixed(d) + " " + units[i];
+}
+
+function fmtSpeed(n) {
+  if (n === null || n === undefined) return "—";
+  if (n <= 0) return "不限速";
+  return fmtBytes(n) + "/s";
+}
+
+function fmtSpeedPlain(n) {
+  if (n === null || n === undefined || n < 0) return "—";
+  if (n === 0) return "0 B/s";
+  return fmtBytes(n) + "/s";
+}
+
+function fmtTime(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  if (isNaN(d)) return "—";
+  const p = (x) => String(x).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+function fmtAgo(ts) {
+  if (!ts) return "—";
+  const s = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (s < 0) return "刚刚";
+  if (s < 60) return Math.round(s) + " 秒前";
+  if (s < 3600) return Math.round(s / 60) + " 分钟前";
+  if (s < 86400) return Math.round(s / 3600) + " 小时前";
+  return Math.round(s / 86400) + " 天前";
+}
+
+function esc(s) {
+  return String(s === null || s === undefined ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+let toastTimer = null;
+function toast(msg, kind) {
+  const el = $("toast");
+  el.textContent = msg;
+  el.className = "toast show" + (kind ? " " + kind : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = "toast"; }, 3600);
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, Object.assign({ headers: {} }, opts || {}));
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = { error: text }; }
+  if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// 图表绘制（轻量自绘，无外部依赖）
+// ---------------------------------------------------------------------------
+function drawAreaChart(canvas, series, opts) {
+  opts = opts || {};
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 600;
+  const cssH = canvas.clientHeight || 170;
+  if (canvas.width !== Math.floor(cssW * dpr) || canvas.height !== Math.floor(cssH * dpr)) {
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const padL = 8, padR = 8, padT = 10, padB = 18;
+  const w = cssW - padL - padR;
+  const h = cssH - padT - padB;
+
+  // 计算 y 轴上限
+  let max = 0;
+  for (const s of series) for (const v of s.data) if (v > max) max = v;
+  if (max <= 0) max = 1024;
+  max = max * 1.15;
+
+  // 网格
+  ctx.strokeStyle = "rgba(36,48,68,.85)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (h * i) / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + w, y); ctx.stroke();
+  }
+
+  // y 轴标签（最大值与 0）
+  ctx.fillStyle = "#8698b3";
+  ctx.font = "11px -apple-system,Segoe UI,sans-serif";
+  ctx.textAlign = "left";
+  ctx.fillText(fmtSpeedPlain(max), padL + 4, padT + 10);
+  ctx.textAlign = "right";
+  if (opts.yLabel) ctx.fillText(opts.yLabel, padL + w - 2, padT + 10);
+
+  const n = Math.max(...series.map(s => s.data.length), 0);
+  if (n === 0) {
+    ctx.fillStyle = "#8698b3";
+    ctx.textAlign = "center";
+    ctx.fillText("等待数据…", cssW / 2, cssH / 2);
+    return;
+  }
+  const xAt = (i) => padL + (n <= 1 ? w : (w * i) / (n - 1));
+  const yAt = (v) => padT + h - (h * Math.min(v, max)) / max;
+
+  // 逐条绘制
+  for (const s of series) {
+    if (!s.data.length) continue;
+    const grad = ctx.createLinearGradient(0, padT, 0, padT + h);
+    grad.addColorStop(0, s.color + "66");
+    grad.addColorStop(1, s.color + "05");
+
+    ctx.beginPath();
+    ctx.moveTo(xAt(0), padT + h);
+    for (let i = 0; i < s.data.length; i++) ctx.lineTo(xAt(i), yAt(s.data[i]));
+    ctx.lineTo(xAt(s.data.length - 1), padT + h);
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.beginPath();
+    for (let i = 0; i < s.data.length; i++) {
+      const x = xAt(i), y = yAt(s.data[i]);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.width || 1.8;
+    ctx.lineJoin = "round";
+    ctx.stroke();
+  }
+
+  // 阈值线
+  if (opts.threshold && opts.threshold > 0) {
+    const y = yAt(opts.threshold);
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = "rgba(227,179,65,.75)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + w, y); ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 状态渲染
+// ---------------------------------------------------------------------------
+let lastStatus = null;
+let activeView = "dash";
+
+function renderHeader(st) {
+  const badge = $("badge-conn");
+  const anyErr = (st.clients || []).some(c => !c.healthy);
+  if (anyErr) {
+    badge.className = "badge err";
+    badge.textContent = "部分客户端异常";
+  } else {
+    badge.className = "badge ok";
+    badge.textContent = "运行正常";
+  }
+  $("badge-uptime").textContent = "运行 " + (st.uptime || "—");
+  const limited = (st.policies || []).filter(p => p.limited);
+  const bm = $("badge-mode");
+  if (limited.length) {
+    bm.className = "badge err";
+    bm.textContent = "已限速 · " + limited.map(p => p.name).join(", ");
+  } else {
+    bm.className = "badge ok";
+    bm.textContent = "未限速";
+  }
+}
+
+function renderMetrics(st) {
+  const agg = st.aggregate || {};
+  const up = agg.up_speed || {};
+  const total = (up.ipv4 || 0) + (up.ipv6 || 0) + (up.unknown || 0);
+
+  $("m-speed").textContent = fmtBytes(total) + "/s";
+  $("m-speed-fam").innerHTML =
+    `<span class="fam"><i class="dot v4"></i>${fmtBytes(up.ipv4 || 0)}/s</span>` +
+    ` &nbsp; <span class="fam"><i class="dot v6"></i>${fmtBytes(up.ipv6 || 0)}/s</span>` +
+    ((up.unknown || 0) > 0 ? ` &nbsp; <span class="fam"><i class="dot unk"></i>${fmtBytes(up.unknown || 0)}/s</span>` : "");
+
+  // 周期累计：取最"紧张"的那条策略
+  const win = agg.window_bytes || {};
+  const winTotal = (win.ipv4 || 0) + (win.ipv6 || 0) + (win.unknown || 0);
+  $("m-window").textContent = fmtBytes(winTotal);
+
+  let progress = 0, target = 0, polLabel = "";
+  let best = null;
+  for (const p of (st.policies || [])) {
+    if (!p.enabled) continue;
+    const th = p.threshold_ipv4 > 0 && p.threshold_ipv6 > 0
+      ? Math.min(p.threshold_ipv4, p.threshold_ipv6)
+      : (p.threshold_total > 0 ? p.threshold_total : Math.max(p.threshold_ipv4 || 0, p.threshold_ipv6 || 0));
+    if (th <= 0) continue;
+    const ratio = p.current_total / th;
+    if (!best || ratio > best.ratio) best = { ratio, p, th };
+  }
+  if (best) {
+    progress = Math.min(1, best.ratio);
+    target = best.th;
+    polLabel = best.p.name;
+  }
+  const bar = $("m-window-bar");
+  bar.style.width = (progress * 100).toFixed(1) + "%";
+  bar.className = progress >= 1 ? "err" : (progress > 0.8 ? "warn" : "");
+  $("m-window-sub").textContent = target > 0
+    ? `阈值 ${fmtBytes(target)} · 已用 ${(progress * 100).toFixed(1)}%（${esc(polLabel)}）`
+    : "未配置阈值";
+
+  const limited = (st.policies || []).filter(p => p.limited);
+  if (limited.length) {
+    $("m-limit").innerHTML = `<span style="color:var(--err)">已限速</span>`;
+    const p = limited[0];
+    const lim = p.limit_total > 0 ? fmtSpeed(p.limit_total)
+      : (p.limit_ipv4 > 0 || p.limit_ipv6 > 0
+        ? [p.limit_ipv4 > 0 ? "v4 " + fmtSpeed(p.limit_ipv4) : "", p.limit_ipv6 > 0 ? "v6 " + fmtSpeed(p.limit_ipv6) : ""].filter(Boolean).join(" / ")
+        : "—");
+    $("m-limit-sub").textContent = `上限 ${lim} · 已持续 ${p.limited_for || "—"}`;
+  } else {
+    $("m-limit").innerHTML = `<span style="color:var(--ok)">正常</span>`;
+    $("m-limit-sub").textContent = "无策略处于限速状态";
+  }
+
+  const cls = st.clients || [];
+  const healthy = cls.filter(c => c.healthy).length;
+  $("m-clients").textContent = healthy + " / " + cls.length;
+  const peers = cls.reduce((a, c) => a + (c.peers || 0), 0);
+  const tors = cls.reduce((a, c) => a + (c.torrents || 0), 0);
+  $("m-clients-sub").textContent = `${tors} 个种子 · ${peers} 个连接 · 采样 ${st.monitor ? st.monitor.poll_count : 0} 次`;
+}
+
+function renderClientsTable(st) {
+  const cls = st.clients || [];
+  if (!cls.length) {
+    $("clients-table").innerHTML = '<div class="empty">尚未配置客户端</div>';
+    return;
+  }
+  let html = `<table><thead><tr>
+    <th>客户端</th><th>状态</th>
+    <th class="num">上传速度</th><th class="num">周期累计</th>
+    <th class="num">下载</th><th class="num">种子/连接</th>
+    <th class="num">当前上传限速</th><th></th>
+  </tr></thead><tbody>`;
+
+  for (const c of cls) {
+    const up = c.up_speed || {};
+    const win = c.window_bytes || {};
+    const totalSpeed = (up.ipv4 || 0) + (up.ipv6 || 0) + (up.unknown || 0);
+    const totalWin = (win.ipv4 || 0) + (win.ipv6 || 0) + (win.unknown || 0);
+
+    const famParts = [];
+    if (up.ipv4 >= 0) famParts.push(`<span class="fam"><i class="dot v4"></i>${fmtBytes(up.ipv4 || 0)}/s</span>`);
+    if (up.ipv6 >= 0) famParts.push(`<span class="fam"><i class="dot v6"></i>${fmtBytes(up.ipv6 || 0)}/s</span>`);
+    if ((up.unknown || 0) > 0 && !c.supports_family_limit) {
+      famParts.push(`<span class="fam"><i class="dot unk"></i>${fmtBytes(up.unknown)}/s</span>`);
+    }
+
+    const statusPill = c.healthy
+      ? `<span class="pill off">正常</span>`
+      : `<span class="pill on" title="${esc(c.last_error || "")}">异常</span>`;
+
+    html += `<tr>
+      <td>
+        <div style="font-weight:600">${esc(c.name)}</div>
+        <div class="sub" style="margin:0">${esc(c.type)}${c.url ? " · " + esc(c.url) : ""}</div>
+      </td>
+      <td>${statusPill}
+        ${c.healthy ? `<div class="sub" style="margin:2px 0 0">${fmtAgo(c.last_seen)}</div>` : ""}
+        ${!c.healthy && c.last_error ? `<div class="sub" style="margin:2px 0 0;max-width:260px;white-space:normal;color:var(--err)">${esc(c.last_error)}</div>` : ""}
+      </td>
+      <td class="num">
+        <div style="font-weight:600">${fmtBytes(totalSpeed)}/s</div>
+        <div class="sub" style="margin:0">${famParts.join(" &nbsp; ")}</div>
+      </td>
+      <td class="num">
+        <div>${fmtBytes(totalWin)}</div>
+        <div class="sub" style="margin:0">v4 ${fmtBytes(win.ipv4 || 0)} · v6 ${fmtBytes(win.ipv6 || 0)}</div>
+      </td>
+      <td class="num">${fmtBytes(c.dl_speed || 0)}/s</td>
+      <td class="num">${c.torrents || 0} / ${c.peers || 0}</td>
+      <td class="num">${c.current_up_limit > 0 ? fmtBytes(c.current_up_limit) + "/s" : '<span style="color:var(--ok)">不限速</span>'}</td>
+      <td class="num"><button data-test="${esc(c.name)}" style="padding:3px 9px;font-size:12px">测试</button></td>
+    </tr>`;
+  }
+  html += "</tbody></table>";
+  $("clients-table").innerHTML = html;
+
+  $("clients-table").querySelectorAll("button[data-test]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const name = btn.getAttribute("data-test");
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>';
+      try {
+        const r = await api("/api/client/test?name=" + encodeURIComponent(name));
+        if (r.ok) {
+          toast(`${name}: 连接正常，版本 ${r.version || "未知"}，上传 ${fmtBytes(r.up_speed)}/s`, "ok");
+        } else {
+          toast(`${name}: ${r.error}`, "err");
+        }
+      } catch (e) {
+        toast("测试失败: " + e.message, "err");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "测试";
+      }
+    });
+  });
+}
+
+function renderPolicies(st) {
+  const ps = st.policies || [];
+  if (!ps.length) {
+    $("policies").innerHTML = '<div class="card"><div class="empty">尚未配置策略</div></div>';
+    return;
+  }
+  let html = "";
+  for (const p of ps) {
+    const ths = [];
+    if (p.threshold_total > 0) ths.push(`合计 ${fmtBytes(p.threshold_total)}`);
+    if (p.threshold_ipv4 > 0) ths.push(`IPv4 ${fmtBytes(p.threshold_ipv4)}`);
+    if (p.threshold_ipv6 > 0) ths.push(`IPv6 ${fmtBytes(p.threshold_ipv6)}`);
+
+    const lims = [];
+    if (p.limit_total > 0) lims.push(fmtBytes(p.limit_total) + "/s");
+    if (p.limit_ipv4 > 0) lims.push("IPv4 " + fmtBytes(p.limit_ipv4) + "/s");
+    if (p.limit_ipv6 > 0) lims.push("IPv6 " + fmtBytes(p.limit_ipv6) + "/s");
+    if (!lims.length) lims.push("不限速");
+
+    const cur4 = (p.current_family && p.current_family.ipv4) || 0;
+    const cur6 = (p.current_family && p.current_family.ipv6) || 0;
+
+    const pctTotal = ((p.progress_total || 0) * 100).toFixed(1);
+    const pct4 = ((p.progress_ipv4 || 0) * 100).toFixed(1);
+    const pct6 = ((p.progress_ipv6 || 0) * 100).toFixed(1);
+
+    html += `<div class="card" style="margin-bottom:14px">
+      <div class="row" style="margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <strong style="font-size:15px">${esc(p.name)}</strong>
+          ${p.limited ? '<span class="pill on">限速中</span>' : '<span class="pill off">正常</span>'}
+          ${p.enabled ? "" : '<span class="pill">已禁用</span>'}
+          ${p.last_error ? `<span class="pill on" title="${esc(p.last_error)}">执行出错</span>` : ""}
+        </div>
+        <div style="display:flex;gap:8px">
+          ${p.limited
+            ? `<button class="primary" data-resume="${esc(p.name)}">解除限速</button>`
+            : `<button data-trigger="${esc(p.name)}">测试限速</button>`}
+        </div>
+      </div>
+
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">
+        <div>
+          <div class="sub">当前周期</div>
+          <div style="font-size:14px">${esc(p.window_label)}</div>
+          <div class="sub">周期长度 ${esc(p.window)} · 对齐方式 ${esc(p.align)} · 周期时间进度 ${pctTotal}%</div>
+          <div class="bar"><i class="${Number(pctTotal) >= 100 ? "err" : ""}" style="width:${Math.min(100, pctTotal)}%"></i></div>
+          ${p.limited ? `<div class="sub" style="color:var(--err)">已持续限速 ${esc(p.limited_for)}</div>` : ""}
+        </div>
+
+        <div>
+          <div class="sub">触发阈值</div>
+          <div style="font-size:14px">${ths.join(" · ") || "—"}</div>
+          <div class="sub">触发后限速为 ${lims.join(" / ")}</div>
+          <div class="sub">周期结束后${p.resume_on_window_reset ? "自动解除" : "保持限速"}${p.cooldown && p.cooldown !== "0s" ? " · 冷却 " + esc(p.cooldown) : ""}</div>
+        </div>
+
+        <div>
+          <div class="sub">本周期累计上传</div>
+          <div style="font-size:19px;font-weight:600">${fmtBytes(p.current_total)}</div>
+          <div class="row" style="margin-top:6px">
+            <span class="fam"><i class="dot v4"></i>IPv4</span><span>${fmtBytes(cur4)}</span>
+          </div>
+          <div class="bar"><i class="v4" style="width:${Math.min(100, pct4)}%"></i></div>
+          <div class="row" style="margin-top:6px">
+            <span class="fam"><i class="dot v6"></i>IPv6</span><span>${fmtBytes(cur6)}</span>
+          </div>
+          <div class="bar"><i class="v6" style="width:${Math.min(100, pct6)}%"></i></div>
+        </div>
+
+        <div>
+          <div class="sub">作用客户端</div>
+          <div style="font-size:14px">${(p.clients && p.clients.length) ? p.clients.map(esc).join(", ") : "全部客户端"}</div>
+          <div class="sub" style="margin-top:8px">操作</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+            ${p.limited
+              ? `<button data-resume="${esc(p.name)}" style="font-size:12.5px">解除限速</button>`
+              : `<button data-trigger="${esc(p.name)}" style="font-size:12.5px">测试限速</button>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+  $("policies").innerHTML = html;
+
+  $("policies").querySelectorAll("button[data-resume]").forEach(b => {
+    b.addEventListener("click", () => policyAction("resume", b.getAttribute("data-resume"), b));
+  });
+  $("policies").querySelectorAll("button[data-trigger]").forEach(b => {
+    b.addEventListener("click", () => policyAction("trigger", b.getAttribute("data-trigger"), b));
+  });
+}
+
+async function policyAction(action, name, btn) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await api("/api/policy/" + action + "?name=" + encodeURIComponent(name), { method: "POST" });
+    toast(r.message || "操作成功", "ok");
+    await tick();
+  } catch (e) {
+    toast("操作失败: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+function renderEvents(events) {
+  if (!events || !events.length) {
+    $("events").innerHTML = '<div class="empty">暂无事件。触发限速或解除限速后会记录在这里。</div>';
+    return;
+  }
+  let html = "";
+  for (const e of events) {
+    const icon = e.type === "speedup" ? "⏫" : e.type === "resume" ? "✅" : "⚠️";
+    const color = e.type === "speedup" ? "var(--err)" : e.type === "resume" ? "var(--ok)" : "var(--warn)";
+    html += `<div class="ev">
+      <time>${fmtTime(e.time)}</time>
+      <div class="txt">
+        <div><span style="color:${color}">${icon} ${esc(e.policy)}</span>
+          ${e.window_bytes > 0 ? `<span class="pill" style="margin-left:8px">累计 ${fmtBytes(e.window_bytes)}${e.threshold ? " / " + fmtBytes(e.threshold) : ""}</span>` : ""}
+          ${e.new_limit > 0 ? `<span class="pill" style="margin-left:6px">限速 ${fmtBytes(e.new_limit)}/s</span>` : ""}
+        </div>
+        <div class="sub" style="margin-top:2px">${esc(e.message)}</div>
+      </div>
+    </div>`;
+  }
+  $("events").innerHTML = html;
+}
+
+// ---------------------------------------------------------------------------
+// 主循环
+// ---------------------------------------------------------------------------
+async function fetchHistory(client) {
+  const r = await api("/api/history" + (client ? "?client=" + encodeURIComponent(client) : ""));
+  return r.samples || [];
+}
+
+function renderCharts(samples) {
+  const speedSeries = [
+    { color: FAM_COLOR.ipv4, data: samples.map(s => (s.up && s.up.ipv4) || 0) },
+    { color: FAM_COLOR.ipv6, data: samples.map(s => (s.up && s.up.ipv6) || 0) },
+  ];
+  const hasUnknown = samples.some(s => (s.up && s.up.unknown) > 0);
+  if (hasUnknown) speedSeries.push({ color: FAM_COLOR.unknown, data: samples.map(s => (s.up && s.up.unknown) || 0) });
+
+  drawAreaChart($("chart-speed"), speedSeries, {
+    yLabel: samples.length ? fmtSpeedPlain(Math.max(...samples.map(s => {
+      const u = s.up || {};
+      return (u.ipv4 || 0) + (u.ipv6 || 0) + (u.unknown || 0);
+    }))) + " 峰值" : ""
+  });
+
+  drawAreaChart($("chart-cum"), [
+    { color: "#e3b341", data: samples.map(s => s.win || 0), width: 2 }
+  ], {});
+}
+
+async function tick() {
+  try {
+    const st = await api("/api/status");
+    lastStatus = st;
+    renderHeader(st);
+    renderMetrics(st);
+    renderClientsTable(st);
+    renderPolicies(st);
+
+    const samples = await fetchHistory();
+    renderCharts(samples);
+  } catch (e) {
+    const badge = $("badge-conn");
+    badge.className = "badge err";
+    badge.textContent = "连接失败";
+  }
+}
+
+async function refreshEvents() {
+  try {
+    const r = await api("/api/events?limit=200");
+    renderEvents(r.events || []);
+  } catch (e) {
+    $("events").innerHTML = `<div class="empty">加载事件失败: ${esc(e.message)}</div>`;
+  }
+}
+
+async function loadConfig() {
+  try {
+    const res = await fetch("/api/config/raw");
+    const text = await res.text();
+    if (!res.ok) throw new Error(text);
+    $("cfg-text").value = text;
+  } catch (e) {
+    toast("读取配置失败: " + e.message, "err");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 事件绑定
+// ---------------------------------------------------------------------------
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+    tab.classList.add("active");
+    activeView = tab.getAttribute("data-view");
+    $("view-" + activeView).classList.add("active");
+    if (activeView === "evt") refreshEvents();
+    if (activeView === "cfg") loadConfig();
+    if (activeView === "dash") tick();
+  });
+});
+
+$("btn-refresh").addEventListener("click", async () => {
+  await tick();
+  if (activeView === "evt") await refreshEvents();
+  toast("已刷新", "ok");
+});
+
+$("btn-evt-refresh").addEventListener("click", refreshEvents);
+
+$("btn-cfg-save").addEventListener("click", async () => {
+  const btn = $("btn-cfg-save");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 保存中';
+  try {
+    const r = await api("/api/config/raw", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml: $("cfg-text").value })
+    });
+    toast(r.message || "配置已保存", "ok");
+    await tick();
+  } catch (e) {
+    toast("保存失败: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存并应用";
+  }
+});
+
+$("btn-cfg-reload").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/reload", { method: "POST" });
+    toast(r.message || "已重载", "ok");
+    await loadConfig();
+    await tick();
+  } catch (e) {
+    toast("重载失败: " + e.message, "err");
+  }
+});
+
+// 窗口尺寸变化时重绘图表
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(async () => {
+    if (activeView === "dash") renderCharts(await fetchHistory());
+  }, 200);
+});
+
+// 启动
+tick();
+refreshEvents();
+setInterval(() => { if (activeView === "dash") tick(); }, 5000);
+setInterval(() => { if (activeView === "evt") refreshEvents(); }, 10000);
+</script>
+</body>
+</html>

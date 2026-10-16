@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<!--
+  Unraid Docker 模板
+
+  安装方式（任选其一）：
+  1. Unraid 网页 → Docker → Add Container → 右上角切换到「XML」粘贴本文件内容
+  2. 把本文件放到 /boot/config/plugins/dockerMan/templates-user/ 下，
+     然后在 Docker → Add Container 的 Template 下拉框里选择 my-bt-traffic-guard
+
+  部署后访问 http://<你的Unraid IP>:8080 即可打开监控面板。
+-->
+<Container version="2">
+  <Name>bt-traffic-guard</Name>
+  <Repository>bt-traffic-guard:1.0.0</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project/>
+  <Overview>
+    BT 上传流量监控与自动限速。
+    持续采集 qBittorrent / Transmission 的上传速度与累计流量（区分 IPv4 / IPv6），
+    当在自定义周期（如每天/每周/每月）内上传总量达到阈值时，自动下发上传限速；
+    周期结束后自动解除。自带 Web 面板，可实时查看曲线、手动解除限速、在线改配置。
+  </Overview>
+  <Category>Network:Web Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL/>
+  <Icon/>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+
+  <Config Name="WebUI 端口" Target="8080" Default="8080" Mode="tcp"
+          Description="监控面板访问端口。部署后打开 http://[你的Unraid IP]:8080"
+          Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+
+  <Config Name="配置目录" Target="/config" Default="/mnt/user/appdata/bt-traffic-guard/config"
+          Mode="rw" Description="存放 config.yaml。首次启动会自动生成一份带注释的默认配置。"
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/bt-traffic-guard/config</Config>
+
+  <Config Name="数据目录" Target="/data" Default="/mnt/user/appdata/bt-traffic-guard/data"
+          Mode="rw" Description="存放运行数据。"
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/bt-traffic-guard/data</Config>
+
+  <Config Name="时区" Target="TZ" Default="Asia/Shanghai" Mode=""
+          Description="影响「自然日/自然周/自然月」周期边界的计算，请设置正确。例如 Asia/Shanghai、Asia/Hong_Kong、UTC。"
+          Type="Variable" Display="always" Required="true" Mask="false">Asia/Shanghai</Config>
+
+  <Config Name="日志级别" Target="BTG_LOG_LEVEL" Default="info" Mode=""
+          Description="debug / info / warn / error。排查问题时用 debug。"
+          Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
+
+  <Config Name="qBittorrent 地址" Target="BTG_QBITTORRENT_URL" Default="" Mode=""
+          Description="可选。填写后覆盖 config.yaml 中的地址。例如 http://192.168.1.10:8080。
+若 qBittorrent 与 Unraid 在同一台机器上，且容器使用 bridge 网络，
+请填 Unraid 的局域网 IP（不要用 127.0.0.1）。"
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="qBittorrent 用户名" Target="BTG_QBITTORRENT_USERNAME" Default="admin" Mode=""
+          Description="qBittorrent WebUI 的用户名。"
+          Type="Variable" Display="always" Required="false" Mask="false">admin</Config>
+
+  <Config Name="qBittorrent 密码" Target="BTG_QBITTORRENT_PASSWORD" Default="" Mode=""
+          Description="qBittorrent WebUI 的密码。"
+          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="Transmission 地址" Target="BTG_TRANSMISSION_URL" Default="" Mode=""
+          Description="可选。例如 http://192.168.1.10:9091。填 IP 即可，程序会自动补 /transmission/rpc。"
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="Transmission 用户名" Target="BTG_TRANSMISSION_USERNAME" Default="" Mode=""
+          Description="若 Transmission 开启了 RPC 认证则填写，否则留空。"
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
+  <Config Name="Transmission 密码" Target="BTG_TRANSMISSION_PASSWORD" Default="" Mode=""
+          Description="若 Transmission 开启了 RPC 认证则填写，否则留空。"
+          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+
+  <Config Name="面板访问密码" Target="BTG_WEB_PASSWORD" Default="" Mode=""
+          Description="可选。设置后自动开启 Web 面板的基本认证，用户名默认 admin（可用 BTG_WEB_USERNAME 修改）。
+强烈建议在局域网以外的环境设置此项。"
+          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+</Container>

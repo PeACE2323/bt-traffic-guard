@@ -1,0 +1,166 @@
+# ===========================================================================
+# BT Traffic Guard 配置示例
+#
+# 把本文件复制为 config.yaml 后按需修改，
+# 或直接启动容器让它自动生成一份默认配置再编辑。
+#
+# 单位约定：
+#   阈值（threshold_*）  = 字节（B）。可用 500GiB / 1.5TB 这类写法。
+#   限速（limit_*）      = 字节/秒（B/s）。0 表示不限速。1024*1024 = 1 MiB/s。
+#   周期（window）       = 时长。支持 30m / 24h / 7d / 30d / 1w。
+# ===========================================================================
+
+# Web 面板监听地址
+listen: ":8080"
+
+# 运行数据目录
+data_dir: "/data"
+
+# 采集间隔。越小曲线越平滑，但对下载器的 API 压力越大。
+# 建议 3s ~ 10s。
+poll_interval: 5s
+
+# 日志级别：debug / info / warn / error
+log_level: info
+
+# 时区。影响「自然日/自然周/自然月」的周期边界。
+# 留空则使用容器本地时区（即 TZ 环境变量）。
+timezone: ""
+
+# 实时曲线保留的采样点数
+history_points: 720
+
+# ---------------------------------------------------------------------------
+# 被监控的下载器
+# ---------------------------------------------------------------------------
+clients:
+  # ---- qBittorrent ----
+  - name: qbittorrent          # 唯一名称，策略里用它来指定作用对象
+    type: qbittorrent
+    # WebUI 地址。注意：如果容器用的是 bridge 网络，
+    # 这里要填宿主机（Unraid）的局域网 IP，不能用 127.0.0.1。
+    url: "http://192.168.1.10:8080"
+    username: "admin"
+    password: "adminadmin"
+    enabled: true
+    # 自签名 HTTPS 证书时设为 true
+    insecure_skip_verify: false
+    timeout: 10s
+    # 该客户端的原始上传限速（字节/秒）。
+    # 仅供记录与参考；程序在解除限速时会恢复到触发前读到的值。
+    upload_limit_ipv4: 0
+    upload_limit_ipv6: 0
+
+  # ---- Transmission ----
+  - name: transmission
+    type: transmission
+    # 填根地址即可，程序会自动补上 /transmission/rpc
+    url: "http://192.168.1.10:9091"
+    # 若开启了 RPC 认证则填写
+    username: ""
+    password: ""
+    enabled: true
+    timeout: 10s
+
+# ---------------------------------------------------------------------------
+# 限速策略
+#
+# 每条策略独立求值。同一客户端可以被多条策略同时作用，
+# 此时以「后触发的那条」下发的限速值为准。
+# ---------------------------------------------------------------------------
+policies:
+  # --- 示例 1：每天上传超过 500 GiB 就限速到 1 MiB/s ---
+  - name: daily-500g
+    enabled: true
+    # 作用对象。["*"] 或省略表示全部客户端。
+    clients: ["*"]
+    # 统计周期长度
+    window: 24h
+    # 周期对齐方式：
+    #   day    自然日（每天 00:00 重置）——最符合「每日流量上限」的直觉
+    #   week   自然周（每周一 00:00 重置）
+    #   month  自然月（每月 1 日 00:00 重置）
+    #   hour   自然小时
+    #   rolling 滚动窗口（从程序启动起算，每 window 时间重置一次）
+    align: day
+
+    # 触发阈值。三个阈值之间是「或」的关系，任一满足即触发：
+    #   threshold_total   IPv4 + IPv6 合计
+    #   threshold_ipv4    仅 IPv4
+    #   threshold_ipv6    仅 IPv6
+    # 设为 0 表示不判断该项。
+    threshold_total: 500GiB
+    threshold_ipv4: 0
+    threshold_ipv6: 0
+
+    # 触发后下发的上传限速（字节/秒）。
+    #   limit_total  全局限速（对不支持分族限速的客户端生效）
+    #   limit_ipv4   IPv4 上传限速（需 qBittorrent 4.6+）
+    #   limit_ipv6   IPv6 上传限速（需 qBittorrent 4.6+）
+    # 若同时设置了 limit_ipv4 / limit_ipv6，程序会优先下发分族限速。
+    limit_total: 1048576        # 1 MiB/s
+    limit_ipv4: 0
+    limit_ipv6: 0
+
+    # 进入新周期后是否自动解除限速
+    resume_on_window_reset: true
+    # 触发后至少保持多久才允许解除，避免在阈值附近反复横跳
+    cooldown: 10m
+
+  # --- 示例 2：IPv6 单独设一个更严格的阈值 ---
+  #  适用于「IPv6 走的是不计流量的小水管」这类场景。
+  # - name: ipv6-cap
+  #   enabled: false
+  #   clients: ["qbittorrent"]
+  #   window: 24h
+  #   align: day
+  #   threshold_ipv6: 100GiB
+  #   limit_ipv6: 524288        # 512 KiB/s（仅限 IPv6）
+  #   resume_on_window_reset: true
+  #   cooldown: 0s
+
+  # --- 示例 3：每月 5 TB 的硬性总量 ---
+  # - name: monthly-5t
+  #   enabled: false
+  #   clients: ["*"]
+  #   window: 30d
+  #   align: month
+  #   threshold_total: 5TiB
+  #   limit_total: 262144       # 256 KiB/s
+  #   resume_on_window_reset: true
+  #   cooldown: 0s
+
+# ---------------------------------------------------------------------------
+# 通知
+# ---------------------------------------------------------------------------
+notify:
+  enabled: false
+  # 需要推送的事件类型：speedup（触发限速）/ resume（解除限速）/ error（执行失败）
+  notify_on: ["speedup", "resume", "error"]
+
+  # --- ntfy 推送（公共服务器或自建均可）---
+  ntfy:
+    enabled: false
+    url: "https://ntfy.sh"      # 自建示例：http://192.168.1.10:8081
+    topic: "bt-traffic-guard"   # 手机端订阅同一个 topic 即可收到
+    token: ""                   # 自建服务开启鉴权时填写
+    priority: "default"         # min / low / default / high / urgent
+
+  # --- 通用 JSON Webhook ---
+  webhook:
+    enabled: false
+    url: "https://example.com/hook"
+    method: POST
+    # 格式：generic（默认，发送完整字段）/ discord / slack
+    format: generic
+    headers:
+      Authorization: "Bearer your-token"
+
+# ---------------------------------------------------------------------------
+# Web 面板认证
+# 也可以只设置 BTG_WEB_PASSWORD 环境变量来开启。
+# ---------------------------------------------------------------------------
+web_auth:
+  enabled: false
+  username: "admin"
+  password: "btguard"
