@@ -40,8 +40,21 @@ clients:
     # WebUI 地址。注意：如果容器用的是 bridge 网络，
     # 这里要填宿主机（Unraid）的局域网 IP，不能用 127.0.0.1。
     url: "http://192.168.1.10:8080"
+
+    # ----- 认证方式二选一 -----
+    #
+    # 推荐：API Key（需要 qBittorrent 5.2.0 及以上）
+    #   在 qBittorrent 的「设置 → WebUI → API Key」中点击生成，
+    #   把得到的 qbt_ 开头的字符串填到这里。
+    #   这是无状态认证：不需要登录、不会触发登录失败次数限制，
+    #   也不受 IP 封禁影响。填了它之后下面的用户名密码会被忽略。
+    api_key: ""
+    #
+    # 兼容：用户名密码（适用于 5.2.0 以下版本）
+    #   注意连续登录失败会触发 qBittorrent 的 IP 临时封禁。
     username: "admin"
     password: "adminadmin"
+
     enabled: true
     # 自签名 HTTPS 证书时设为 true
     insecure_skip_verify: false
@@ -52,6 +65,7 @@ clients:
     upload_limit_ipv6: 0
 
   # ---- Transmission ----
+  # 注意：Transmission 不支持 API Key，只能用用户名密码（RPC 基本认证）。
   - name: transmission
     type: transmission
     # 填根地址即可，程序会自动补上 /transmission/rpc
