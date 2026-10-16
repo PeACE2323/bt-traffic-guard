@@ -25,10 +25,23 @@ var staticFS embed.FS
 // ---------------------------------------------------------------------------
 
 // Deps 是 Web 层需要的所有依赖。
+//
+// Registry / Monitor / Engine 提供两种传法：
+//   - 直接传实例（Registry / Monitor / Engine），适合测试与静态场景
+//   - 传访问函数（XxxFn），适合运行时会热重载替换实例的场景
+//
+// 生产代码使用后者：热重载会整体替换这些组件，
+// 若固化实例，面板会在重载后一直显示旧数据、甚至继续用旧凭据采集。
+// 访问函数优先于实例。
 type Deps struct {
 	Registry *client.Registry
 	Monitor  *traffic.Monitor
 	Engine   *policy.Engine
+
+	RegistryFn func() *client.Registry
+	MonitorFn  func() *traffic.Monitor
+	EngineFn   func() *policy.Engine
+
 	// ConfigPath 是配置文件路径，保存配置时使用。
 	ConfigPath string
 	// Config 返回当前生效的配置。
@@ -43,6 +56,30 @@ type Deps struct {
 	StartedAt time.Time
 	// Hostname 用于界面展示。
 	Hostname string
+}
+
+// registry 返回当前生效的客户端注册表。
+func (d Deps) registry() *client.Registry {
+	if d.RegistryFn != nil {
+		return d.RegistryFn()
+	}
+	return d.Registry
+}
+
+// monitor 返回当前生效的监控器。
+func (d Deps) monitor() *traffic.Monitor {
+	if d.MonitorFn != nil {
+		return d.MonitorFn()
+	}
+	return d.Monitor
+}
+
+// engine 返回当前生效的策略引擎。
+func (d Deps) engine() *policy.Engine {
+	if d.EngineFn != nil {
+		return d.EngineFn()
+	}
+	return d.Engine
 }
 
 // Server 是 HTTP 服务。
@@ -72,6 +109,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/events", s.wrap(s.handleEvents))
 	s.mux.HandleFunc("/api/config", s.wrap(s.handleConfig))
 	s.mux.HandleFunc("/api/config/raw", s.wrap(s.handleConfigRaw))
+	s.mux.HandleFunc("/api/config/form", s.wrap(s.handleFormConfig))
 	s.mux.HandleFunc("/api/reload", s.wrap(s.handleReload))
 	s.mux.HandleFunc("/api/policy/resume", s.wrap(s.handlePolicyResume))
 	s.mux.HandleFunc("/api/policy/trigger", s.wrap(s.handlePolicyTrigger))
@@ -189,8 +227,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	states := []policy.PolicyState{}
-	if s.deps.Engine != nil {
-		states = s.deps.Engine.States()
+	if s.deps.engine() != nil {
+		states = s.deps.engine().States()
 	}
 
 	return writeJSON(w, statusResponse{
@@ -199,10 +237,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) error {
 		StartedAt: s.deps.StartedAt,
 		Uptime:    time.Since(s.deps.StartedAt).Round(time.Second).String(),
 		Now:       time.Now(),
-		Aggregate: s.deps.Monitor.Aggregate(),
-		Clients:   s.deps.Monitor.AllSnapshots(),
+		Aggregate: s.deps.monitor().Aggregate(),
+		Clients:   s.deps.monitor().AllSnapshots(),
 		Policies:  states,
-		Monitor:   s.deps.Monitor.Stats(),
+		Monitor:   s.deps.monitor().Stats(),
 		Config:    view,
 	})
 }
@@ -211,7 +249,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) error {
 	name := r.URL.Query().Get("client")
 	return writeJSON(w, map[string]any{
 		"client":  name,
-		"samples": s.deps.Monitor.History(name),
+		"samples": s.deps.monitor().History(name),
 	})
 }
 
@@ -222,10 +260,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) error {
 			limit = 100
 		}
 	}
-	if s.deps.Engine == nil {
+	if s.deps.engine() == nil {
 		return writeJSON(w, map[string]any{"events": []any{}})
 	}
-	return writeJSON(w, map[string]any{"events": s.deps.Engine.Events(limit)})
+	return writeJSON(w, map[string]any{"events": s.deps.engine().Events(limit)})
 }
 
 // configResponse 是 /api/config 的响应，附带可选的原始 YAML。
@@ -310,7 +348,7 @@ func (s *Server) handlePolicyResume(w http.ResponseWriter, r *http.Request) erro
 	if name == "" {
 		return apiError{Code: 400, Message: "缺少 name 参数"}
 	}
-	if err := s.deps.Engine.ForceResume(r.Context(), name); err != nil {
+	if err := s.deps.engine().ForceResume(r.Context(), name); err != nil {
 		return apiError{Code: 400, Message: err.Error()}
 	}
 	return writeJSON(w, map[string]any{"ok": true, "message": "已解除策略 " + name + " 的限速"})
@@ -324,7 +362,7 @@ func (s *Server) handlePolicyTrigger(w http.ResponseWriter, r *http.Request) err
 	if name == "" {
 		return apiError{Code: 400, Message: "缺少 name 参数"}
 	}
-	if err := s.deps.Engine.ForceTrigger(r.Context(), name); err != nil {
+	if err := s.deps.engine().ForceTrigger(r.Context(), name); err != nil {
 		return apiError{Code: 400, Message: err.Error()}
 	}
 	return writeJSON(w, map[string]any{"ok": true, "message": "已手动触发策略 " + name})
@@ -333,7 +371,7 @@ func (s *Server) handlePolicyTrigger(w http.ResponseWriter, r *http.Request) err
 // handleClientTest 测试与某个客户端的连通性。
 func (s *Server) handleClientTest(w http.ResponseWriter, r *http.Request) error {
 	name := r.URL.Query().Get("name")
-	c, ok := s.deps.Registry.Get(name)
+	c, ok := s.deps.registry().Get(name)
 	if !ok {
 		return apiError{Code: 404, Message: "未找到客户端 " + name}
 	}
@@ -374,7 +412,7 @@ func (s *Server) handleClientLimit(w http.ResponseWriter, r *http.Request) error
 	if err := decodeJSON(r, &body); err != nil {
 		return err
 	}
-	c, ok := s.deps.Registry.Get(body.Name)
+	c, ok := s.deps.registry().Get(body.Name)
 	if !ok {
 		return apiError{Code: 404, Message: "未找到客户端 " + body.Name}
 	}
