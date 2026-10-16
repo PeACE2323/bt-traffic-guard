@@ -331,6 +331,40 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
+### 如果 workflow 没有生效 / 推送被拒绝
+
+GitHub 对 `.github/workflows/` 下的文件有**独立的权限门禁**。
+用自动化令牌（CI / API / 脚本）推送时会报：
+
+```
+refusing to allow a Personal Access Token to create or update workflow
+`.github/workflows/build.yml` without `workflow` scope
+```
+
+这个限制**同时作用于 REST API 与 git 推送两条路径**，无法绕过，必须补权限。
+
+仓库自带一个脚本，用你自己的 git 凭据把它推上去：
+
+```bash
+bash scripts/install-workflow.sh
+```
+
+或者手工处理，三选一：
+
+1. **给令牌补权限**：到 [Personal access tokens](https://github.com/settings/personal-access-tokens)
+   编辑该令牌，把 **Workflows** 设为 `Read and write`。
+2. **改用 SSH 推送**（SSH 不受该限制）：
+   ```bash
+   git remote set-url origin git@github.com:PeACE2323/bt-traffic-guard.git
+   git push origin main
+   ```
+3. **在网页上创建**：打开
+   [新建 workflow 文件](https://github.com/PeACE2323/bt-traffic-guard/new/main/.github/workflows)，
+   文件名填 `build.yml`，把仓库里 `.github/workflows/build.yml` 的内容粘贴进去提交。
+
+> 推上去之后，到仓库的 **Actions** 标签页确认 workflow 出现，
+> 也可以点 **Run workflow** 手动触发一次。
+
 ---
 
 ## 从源码构建
