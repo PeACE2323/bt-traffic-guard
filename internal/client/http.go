@@ -31,6 +31,9 @@ type httpDoer struct {
 	client *http.Client
 	// basicAuth 为 true 时对每个请求附加 Authorization 头。
 	basicAuth bool
+	// bearer 非空时对每个请求附加 Authorization: Bearer <bearer>。
+	// 这是 qBittorrent v5.2.0+ 的 API Key 认证方式（无状态，无需登录）。
+	bearer string
 	// referer 用于部分客户端（qBittorrent 相对路径场景）。
 	referer string
 }
@@ -99,7 +102,11 @@ func (h *httpDoer) request(ctx context.Context, method, path string, body io.Rea
 			req.Header.Set("Origin", u.Scheme+"://"+u.Host)
 		}
 	}
-	if h.basicAuth && h.user != "" {
+	if h.bearer != "" {
+		// qBittorrent v5.2.0+ 的 API Key 认证：无状态 Bearer。
+		// 优先级高于 Basic Auth。
+		req.Header.Set("Authorization", "Bearer "+h.bearer)
+	} else if h.basicAuth && h.user != "" {
 		req.SetBasicAuth(h.user, h.pass)
 	}
 	for k, v := range headers {
@@ -146,7 +153,9 @@ func (h *httpDoer) requestWithHeaders(ctx context.Context, method, path string, 
 	}
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("User-Agent", "bt-traffic-guard/1.0")
-	if h.basicAuth && h.user != "" {
+	if h.bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+h.bearer)
+	} else if h.basicAuth && h.user != "" {
 		req.SetBasicAuth(h.user, h.pass)
 	}
 	for k, v := range headers {
