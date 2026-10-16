@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -878,15 +879,39 @@ func NormalizeURL(raw string) string {
 }
 
 // IsLoopback 判断地址是否指向本机（用于给出配置建议）。
+// IsLoopback 判断地址是否指向本机（用于在容器场景下给出配置建议）。
+//
+// 必须能正确处理 IPv6：IPv6 地址本身含冒号，
+// 若用「按第一个冒号切分」的朴素做法，会把 [::1]:8080 切成 "["
+// 而无法识别，导致本该给出的提示漏掉。
 func IsLoopback(rawURL string) bool {
-	host := rawURL
-	if i := strings.Index(host, "://"); i >= 0 {
-		host = host[i+3:]
+	host := strings.TrimSpace(rawURL)
+	if host == "" {
+		return false
 	}
-	if i := strings.IndexAny(host, "/:"); i >= 0 {
-		host = host[:i]
+
+	// 优先用 url.Parse，它能正确处理 [::1]:8080 这类带方括号的写法。
+	if strings.Contains(host, "://") {
+		if u, err := url.Parse(host); err == nil && u.Host != "" {
+			host = u.Host
+		}
 	}
-	if host == "localhost" {
+
+	// 去掉可能存在的端口。
+	// 注意：只有在「非 IPv6 字面量」或「已去掉方括号」时才安全地按冒号切分。
+	if strings.HasPrefix(host, "[") {
+		// 形如 [::1]:8080 或 [::1]
+		if i := strings.Index(host, "]"); i > 0 {
+			host = host[1:i]
+		}
+	} else if ip := net.ParseIP(host); ip == nil {
+		// 不是裸 IP，说明可能带端口（如 127.0.0.1:8080 或 nas.local:8080）
+		if i := strings.LastIndex(host, ":"); i > 0 {
+			host = host[:i]
+		}
+	}
+
+	if strings.EqualFold(host, "localhost") {
 		return true
 	}
 	ip := net.ParseIP(host)
