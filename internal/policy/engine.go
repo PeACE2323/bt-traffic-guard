@@ -290,12 +290,28 @@ func (e *Engine) mergeAdoptedInner(prev map[string]*runtime, oldEvents []Event, 
 }
 
 // Evaluate 对所有策略求值一次。ctx 用于下发限速调用。
+//
+// 并发安全说明（重要）：
+// 该方法会在整个求值过程中持有引擎锁。
+// 原因是策略的运行状态（limited / appliedLimits / baselineLimits 等，
+// 其中多个是 map）会在求值中被读写，而这些访问此前没有受到保护。
+//
+// 具体后果：Evaluate 由定时器每秒调用一次，而 WebUI 的
+// 「测试限速 / 解除限速」按钮会在 HTTP handler 的独立 goroutine
+// 中调用 ForceTrigger / ForceResume。两者同时执行会触发
+// Go 运行时的 "concurrent map writes"，这是【不可恢复的致命错误】——
+// 进程会直接终止，而不是返回 error，表现为容器无故退出。
+//
+// 代价：下发限速时会持有锁（网络调用），可能阻塞状态查询。
+// 这是有意的取舍 —— 正确性优先于查询延迟，
+// 且单次 HTTP 调用通常只有毫秒级。
 func (e *Engine) Evaluate(ctx context.Context) {
 	e.mu.Lock()
-	policies := append([]*runtime(nil), e.policies...)
+	defer e.mu.Unlock()
+
 	loc := e.loc
 	startedAt := e.startedAt
-	e.mu.Unlock()
+	policies := e.policies
 
 	now := time.Now()
 
@@ -713,11 +729,16 @@ type PolicyState struct {
 }
 
 // States 返回所有策略的当前状态。
+//
+// 全程持有引擎锁：它会读取各策略的运行状态，
+// 而 Evaluate / Force* 会写这些字段。若不加锁读取，
+// 除了数据竞争之外，还可能在 map 扩容读到不一致的中间态。
 func (e *Engine) States() []PolicyState {
 	e.mu.Lock()
-	policies := append([]*runtime(nil), e.policies...)
+	defer e.mu.Unlock()
+
 	loc := e.loc
-	e.mu.Unlock()
+	policies := e.policies
 
 	now := time.Now()
 	out := make([]PolicyState, 0, len(policies))
@@ -781,8 +802,14 @@ func (e *Engine) Events(limit int) []Event {
 }
 
 // ForceResume 手动解除某个策略的限速。
+//
+// 与 Evaluate 一样，整个操作过程中持有引擎锁：
+// resumeLimit 会读写策略的运行状态（含 map），
+// 若与定时求值并发执行会触发 "concurrent map writes" 致命错误。
 func (e *Engine) ForceResume(ctx context.Context, name string) error {
 	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	var target *runtime
 	for _, rt := range e.policies {
 		if strings.EqualFold(rt.cfg.Name, name) {
@@ -790,7 +817,6 @@ func (e *Engine) ForceResume(ctx context.Context, name string) error {
 			break
 		}
 	}
-	e.mu.Unlock()
 
 	if target == nil {
 		return fmt.Errorf("未找到策略 %q", name)
@@ -803,8 +829,12 @@ func (e *Engine) ForceResume(ctx context.Context, name string) error {
 }
 
 // ForceTrigger 手动触发某个策略的限速（用于测试通知与限速是否可用）。
+//
+// 同样在全程持有引擎锁，理由见 ForceResume 的说明。
 func (e *Engine) ForceTrigger(ctx context.Context, name string) error {
 	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	var target *runtime
 	for _, rt := range e.policies {
 		if strings.EqualFold(rt.cfg.Name, name) {
@@ -812,7 +842,6 @@ func (e *Engine) ForceTrigger(ctx context.Context, name string) error {
 			break
 		}
 	}
-	e.mu.Unlock()
 
 	if target == nil {
 		return fmt.Errorf("未找到策略 %q", name)
