@@ -1,0 +1,8 @@
+# p
+name: p
+on: workflow_dispatch
+jobs:
+  x:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
