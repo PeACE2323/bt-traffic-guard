@@ -104,22 +104,59 @@ func (a *App) Bootstrap() error {
 	}
 	if created {
 		if err := os.MkdirAll(filepath.Dir(a.configPath), 0o755); err != nil {
-			return fmt.Errorf("创建配置目录失败: %w", err)
+			return fmt.Errorf("%w\n\n%s", err, writableHint(filepath.Dir(a.configPath)))
 		}
 		if err := config.Save(a.configPath, cfg); err != nil {
-			return fmt.Errorf("写入初始配置失败: %w", err)
+			return fmt.Errorf("%w\n\n%s", err, writableHint(filepath.Dir(a.configPath)))
 		}
 		a.log.Info("已生成默认配置文件，请按需修改", "path", a.configPath)
 	}
 	a.applyConfig(cfg, true)
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		a.log.Warn("创建数据目录失败", "dir", cfg.DataDir, "err", err)
+		a.log.Warn("创建数据目录失败（不影响运行）", "dir", cfg.DataDir, "err", err)
 	}
+	// 配置文件已存在时，仍要确认它可写：
+	// 否则用户在 WebUI 上点保存会失败，而问题要到那时才暴露。
+	if created == false {
+		if err := checkWritable(a.configPath); err != nil {
+			a.log.Warn("配置文件不可写，WebUI 将无法保存配置",
+				"path", a.configPath, "err", err)
+			a.log.Warn("如需在网页上改配置，请修正权限", "hint", permHint(filepath.Dir(a.configPath)))
+		}
+	}
+
 	if fi, err := os.Stat(a.configPath); err == nil {
 		a.cfgModTime = fi.ModTime()
 	}
 	return nil
+}
+
+// writableHint 生成「目录不可写」时的排查提示。
+//
+// 容器场景下最常见的原因不是磁盘问题，而是挂载的宿主目录属主与
+// 容器内运行用户（默认 uid 1000）不一致 —— 镜像里虽然 chown 过
+// /config 与 /data，但 bind mount 会用宿主目录覆盖掉这层权限。
+func writableHint(dir string) string {
+	return "无法写入 " + dir + "。\n" +
+		"如果这是 Docker 容器，常见原因是挂载的宿主目录属主与容器内运行用户不一致。\n" +
+		"镜像默认以 uid 1000 运行，请在 NAS 上执行（把路径换成你自己的）：\n" +
+		"    sudo chown -R 1000:1000 /path/to/config /path/to/data\n" +
+		"或者让容器以 root 运行（在 docker run 中加 --user 0:0，或在 compose 里加 user: \"0:0\"）。"
+}
+
+// permHint 生成权限修正提示。
+func permHint(dir string) string {
+	return "sudo chown -R 1000:1000 " + dir
+}
+
+// checkWritable 测试对目标文件（或所在目录）是否可写。
+func checkWritable(path string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // applyConfig 用新配置重建运行时组件。
