@@ -8,6 +8,7 @@
 //   4. ELF magic 校验
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 let fail = 0;
 function check(name, got, want) {
@@ -45,22 +46,42 @@ check('armv7 URL', url('armv7'),
 
 console.log('\n=== 3. 用真实下载的文件验证大小与 ELF 校验 ===');
 const dir = process.argv[2];
+
+// 复刻脚本里的 ELF 判定：
+//   magic="$(dd if=... bs=1 count=4 | od -An -c | tr -d ' \n')"
+//   case "$magic" in 177ELF*) ok ;; esac
+// od -c 把 0x7F 显示为八进制 177，其余可打印字符原样输出。
+function odC(f) {
+  const b = fs.readFileSync(f).slice(0, 4);
+  let s = '';
+  for (const c of b) {
+    if (c >= 32 && c < 127) s += String.fromCharCode(c);
+    else s += '\\' + c.toString(8).padStart(3, '0');
+  }
+  return s.replace(/[ \n]/g, '');
+}
+function isELF(f) {
+  if (odC(f).startsWith('177ELF')) return true;
+  // 备用判定：直接比对前 4 字节
+  return fs.readFileSync(f).slice(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]));
+}
+
 for (const a of ['amd64', 'arm64', 'armv7']) {
   const f = path.join(dir, 'btg-' + a);
   if (!fs.existsSync(f)) { console.log(`  [SKIP] ${a} 文件不存在`); continue; }
   const buf = fs.readFileSync(f);
   // 脚本: [ "$size" -lt 1000000 ] 视为失败
   check(`${a} 大小 >= 1MB`, buf.length >= 1000000, 'true');
-  // 脚本: head -c 4 | od -An -tx1 需要等于 7f454c46
-  const magic = buf.slice(0, 4).toString('hex');
-  check(`${a} ELF magic`, magic, '7f454c46');
+  check(`${a} 通过 ELF 判定`, isELF(f), 'true');
 }
 
-console.log('\n=== 4. 边界：小文件应被拒绝 ===');
-// 模拟一个被截断/错误页的响应
-const tiny = Buffer.from('<html>404</html>');
-check('404 页面大小 < 1MB（应拒绝）', tiny.length < 1000000, 'true');
-check('404 页面 magic != ELF（应拒绝）', tiny.slice(0, 4).toString('hex') === '7f454c46', 'false');
+console.log('\n=== 4. 边界：非 ELF 内容应被拒绝 ===');
+// 模拟下载到了错误页面（如 404 HTML），而不是二进制
+const fake = path.join(os.tmpdir(), 'verify-script-logic-fake-' + process.pid);
+fs.writeFileSync(fake, '<html>404 Not Found</html>');
+check('404 页面大小 < 1MB（应拒绝）', fs.statSync(fake).size < 1000000, 'true');
+check('404 页面未通过 ELF 判定（应拒绝）', isELF(fake), 'false');
+fs.rmSync(fake, { force: true });
 
 console.log('');
 if (fail === 0) console.log('*** 脚本逻辑校验全部通过 ***');

@@ -112,20 +112,51 @@ fi
 # 只做静态校验，不实际执行二进制：
 # 用户可能是在 macOS 上构建给 NAS 用的镜像，此时 Linux 二进制无法在本机运行。
 echo "==> 校验产物"
-size="$(wc -c < "$BIN" | tr -d ' ')"
-if [ "$size" -lt 1000000 ]; then
-  echo "错误：下载的文件只有 $size 字节，明显不是有效二进制。" >&2
+#
+# 注意：这里刻意不用 `head -c 4` 与 `od -An -tx1`。
+# 前者是 GNU 扩展（POSIX 只保证 head -n），后者在部分精简系统上
+# 的选项写法不一致。NAS 环境五花八门（群晖 DSM、QNAP、Unraid、树莓派），
+# 用 dd 读前 4 字节再按字符串比较是最稳的写法。
+if command -v wc >/dev/null 2>&1; then
+  size="$(wc -c < "$BIN" | tr -d ' ')"
+else
+  size=0
+fi
+if [ "${size:-0}" -lt 1000000 ]; then
+  echo "错误：下载的文件只有 ${size:-未知} 字节，明显不是有效二进制。" >&2
   echo "可能是 release 尚未发布，或架构 $ARCH 没有对应产物。" >&2
   echo "手动检查：$URL" >&2
   exit 1
 fi
-# 确认是 ELF（前 4 字节 0x7F 'E' 'L' 'F'）
-magic="$(head -c 4 "$BIN" | od -An -tx1 | tr -d ' \n')"
-if [ "$magic" != "7f454c46" ]; then
-  echo "错误：下载的不是有效的 ELF 二进制（magic=$magic）。" >&2
-  exit 1
+
+# 确认是 ELF：前 4 字节应为 0x7F 'E' 'L' 'F'
+elf_magic() {
+  # dd 用 bs=1 count=4 读取文件头；2>/dev/null 屏蔽统计信息
+  dd if="$1" bs=1 count=4 2>/dev/null | od -An -c 2>/dev/null | tr -d ' \n'
+}
+magic="$(elf_magic "$BIN")"
+case "$magic" in
+  177ELF*)
+    : # 匹配（od -c 把 0x7F 显示为 177）
+    ;;
+  *)
+    # 备用判定：直接看文件是否以 ELF 开头
+    if [ "$(dd if="$BIN" bs=1 count=4 2>/dev/null)" = "$(printf '\177ELF')" ]; then
+      :
+    else
+      echo "错误：下载的不是有效的 ELF 二进制（文件头 = $magic）。" >&2
+      echo "可能下载到了错误页面而非二进制。请手动检查：" >&2
+      echo "  $URL" >&2
+      exit 1
+    fi
+    ;;
+esac
+
+if command -v awk >/dev/null 2>&1; then
+  echo "    大小 $(awk "BEGIN{printf \"%.2f MB\", $size/1024/1024}")，ELF 校验通过"
+else
+  echo "    大小 $size 字节，ELF 校验通过"
 fi
-echo "    大小 $(echo "$size" | awk '{printf "%.2f MB", $1/1024/1024}')，ELF 校验通过"
 
 # --- 5. 构建镜像 -----------------------------------------------------------
 echo "==> 构建镜像: $IMAGE_TAG"
