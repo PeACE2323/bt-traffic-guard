@@ -48,6 +48,7 @@ run() {
 
 run "配置文件校验"        node "$SELF/validate-yaml.cjs" "$ROOT"
 run "构建脚本逻辑校验"    node "$SELF/verify-script-logic.cjs" "$ROOT/.tools"
+run "根目录定位逻辑校验"  node "$SELF/verify-locate-root.cjs"
 run "前端脚本校验"        node "$SELF/test-frontend.cjs" "$ROOT"
 
 # ELF 校验需要已构建的产物（由 build-image.sh 下载，或本地交叉编译得到）

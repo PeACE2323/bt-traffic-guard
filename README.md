@@ -46,6 +46,16 @@ cd bt-traffic-guard
 bash scripts/build-image.sh
 ```
 
+**NAS 上不方便用 git？** 直接下载 tar 包也一样（脚本不依赖 git）：
+
+```bash
+curl -fL -o btg.tar.gz \
+  https://github.com/PeACE2323/bt-traffic-guard/archive/refs/heads/main.tar.gz
+tar -xzf btg.tar.gz
+cd bt-traffic-guard-main
+bash scripts/build-image.sh
+```
+
 脚本跑完会直接给出 `docker run` 命令。然后打开
 `http://<你的Unraid IP>:8080` → **配置** 标签页 →
 填写 qBittorrent / Transmission 的地址与凭据 → 保存，立即生效。

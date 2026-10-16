@@ -23,24 +23,39 @@ WF_PATH=".github/workflows/build.yml"
 
 # 定位仓库根目录。
 #
-# 注意：不能用 $(dirname "$0")，因为用户可能通过软链接调用，
-# 或用 `bash /path/to/scripts/install-workflow.sh` 从别处执行。
-# 优先用 git 定位（最可靠），失败时回退到脚本自身位置并解析软链接。
-if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-  :
-else
-  script_path="$0"
+# 不能用 $(dirname "$0")：它给出的是【相对于调用时工作目录】的路径，
+# 用户从别处用相对路径调用时会算错；软链接调用也会算错。
+#
+# 因此按以下顺序尝试：
+#   1. 用 git 定位 —— 最可靠，但要求是从本项目的 git 仓库里执行
+#   2. 回退：解析软链接得到脚本真实路径，再取其上一级
+locate_root() {
+  local candidate=""
+  if candidate="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$candidate" ]; then
+    # 校验确实是本项目：模板副本随仓库分发，可作为标志物
+    if [ -f "$candidate/scripts/build.yml.example" ] || [ -f "$candidate/Dockerfile.release" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  fi
+
+  local sp="$0"
   if command -v readlink >/dev/null 2>&1; then
-    while [ -L "$script_path" ]; do
-      target="$(readlink "$script_path")"
+    local guard=0
+    while [ -L "$sp" ] && [ "$guard" -lt 40 ]; do
+      local target
+      target="$(readlink "$sp")"
       case "$target" in
-        /*) script_path="$target" ;;
-        *)  script_path="$(dirname "$script_path")/$target" ;;
+        /*) sp="$target" ;;
+        *)  sp="$(dirname "$sp")/$target" ;;
       esac
+      guard=$((guard + 1))
     done
   fi
-  ROOT="$(cd "$(dirname "$script_path")/.." && pwd)"
-fi
+  (cd "$(dirname "$sp")/.." && pwd)
+}
+
+ROOT="$(locate_root)"
 cd "$ROOT"
 
 if [ ! -f "$WF_PATH" ]; then
