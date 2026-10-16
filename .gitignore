@@ -1,5 +1,20 @@
 # 忽略构建产物与本地测试环境
 .tools/
+
+# 本地自检产生的临时目录
+/tmp/
+
+# 构建出来的可执行文件
 *.exe
-bt-traffic-guard
-btg
+
+# 注意：下面用【前导斜杠】把规则锚定到仓库根目录。
+#
+# 若写成不带斜杠的 `bt-traffic-guard`，它会匹配任何同名路径，
+# 包括目录 cmd/bt-traffic-guard/ —— 那样该包下【新增】的文件
+# 会被静默忽略（已跟踪的 main.go 不受影响，所以问题很隐蔽）。
+/bt-traffic-guard
+/btg
+
+# 构建镜像时下载/生成的二进制（scripts/build-image.sh 会放在仓库根，
+# 已被上面的 /bt-traffic-guard 覆盖；这里再兜底一层以防改名）
+/bt-traffic-guard-linux-*
