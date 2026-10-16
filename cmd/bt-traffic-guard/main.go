@@ -145,6 +145,7 @@ func (a *App) applyConfig(cfg *config.Config, first bool) {
 			URL:                cc.URL,
 			Username:           cc.Username,
 			Password:           cc.Password,
+			APIKey:             cc.APIKey,
 			InsecureSkipVerify: cc.InsecureSkipVerify,
 			Timeout:            cc.Timeout.Std(),
 			UploadLimitIPv4:    cc.UploadLimitIPv4.Int64(),
@@ -155,7 +156,8 @@ func (a *App) applyConfig(cfg *config.Config, first bool) {
 			continue
 		}
 		reg.Add(client.NewManaged(c))
-		a.logf("info", "已注册客户端 %s (%s) → %s", cc.Name, cc.Type, cc.URL)
+		a.logf("info", "已注册客户端 %s (%s) → %s，认证方式：%s",
+			cc.Name, cc.Type, cc.URL, cc.AuthMode())
 	}
 	a.registry = reg
 
@@ -190,15 +192,21 @@ func (a *App) Run(ctx context.Context) {
 	cfg := a.Config()
 
 	// 1. 采样循环
+	//
+	// 注意：热重载会替换 a.monitor（连带替换其内部持有的 registry），
+	// 所以这里不能只在启动时取一次 a.monitor，否则重载后旧监控器会
+	// 继续轮询旧 registry 里的旧客户端，表现为「配置改了但采集还是用旧凭据」。
+	// 因此每轮都重新读取当前实例。
 	monCtx, cancelMon := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		a.monitor.Run(monCtx)
+		runMonitorLoop(monCtx, a.currentMonitor)
 	}()
 
 	// 2. 策略求值循环（比采样稍慢，留出累计量更新时间）
+	// 同样地，每轮都取当前引擎，确保热重载后立即使用新配置。
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -209,7 +217,9 @@ func (a *App) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				a.engine.Evaluate(ctx)
+				if eng := a.currentEngine(); eng != nil {
+					eng.Evaluate(ctx)
+				}
 			}
 		}
 	}()
@@ -231,8 +241,7 @@ func (a *App) Run(ctx context.Context) {
 	}()
 
 	// 4. HTTP 服务
-	srv := &http.Server{
-		Addr:              cfg.Listen,
+	srv := &http.Server{Addr: cfg.Listen,
 		Handler:           a.buildHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
@@ -247,6 +256,9 @@ func (a *App) Run(ctx context.Context) {
 			cancelMon()
 		}
 	}()
+
+	// 5. 客户端认证能力自检（后台执行，不阻塞启动）
+	go a.checkClientAuth()
 
 	<-ctx.Done()
 	a.logf("info", "收到退出信号，正在关闭…")
@@ -264,12 +276,15 @@ func (a *App) Run(ctx context.Context) {
 }
 
 // buildHandler 构造带认证的 HTTP handler。
+//
+// 这里传入的是访问函数而不是实例：配置热重载会替换 registry / monitor / engine，
+// 如果在这里固化实例，重载后面板会一直显示旧数据。
 func (a *App) buildHandler() http.Handler {
 	host, _ := os.Hostname()
 	server := web.NewServer(web.Deps{
-		Registry:   a.registry,
-		Monitor:    a.monitor,
-		Engine:     a.engine,
+		RegistryFn: a.currentRegistry,
+		MonitorFn:  a.currentMonitor,
+		EngineFn:   a.currentEngine,
 		ConfigPath: a.configPath,
 		Config:     a.Config,
 		Reload:     a.Reload,
@@ -288,11 +303,81 @@ func (a *App) buildHandler() http.Handler {
 	return server
 }
 
+// currentRegistry 返回当前生效的客户端注册表。
+func (a *App) currentRegistry() *client.Registry {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.registry
+}
+
 // Config 返回当前生效的配置。
 func (a *App) Config() *config.Config {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.cfg
+}
+
+// currentMonitor 返回当前生效的监控器（热重载后会变化）。
+func (a *App) currentMonitor() *traffic.Monitor {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.monitor
+}
+
+// currentEngine 返回当前生效的策略引擎（热重载后会变化）。
+func (a *App) currentEngine() *policy.Engine {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.engine
+}
+
+// runMonitorLoop 持续采样，并在热重载替换监控器后自动切换到新实例。
+//
+// 每个监控器实例被切换时会停止使用（它内部的 registry 已过期），
+// 但由于它只在被引用的期间工作，旧实例会在本函数切换到新实例后
+// 自然失去引用并被回收。
+func runMonitorLoop(ctx context.Context, get func() *traffic.Monitor) {
+	// 首次采样立即执行，用于尽快建立流量基线。
+	var last *traffic.Monitor
+	for {
+		mon := get()
+		if mon == nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+				continue
+			}
+		}
+
+		// 监控器被替换了：从头开始一轮（新实例自带空状态，已被 AdoptStateFrom 补齐）
+		last = mon
+		interval := mon.Interval()
+		if interval <= 0 {
+			interval = 5 * time.Second
+		}
+
+		mon.PollOnce(ctx, time.Now())
+
+		// 以 interval 为节奏采样，但期间持续检查监控器是否已被替换，
+		// 一旦替换立即跳出，避免继续用旧 registry 采样。
+		timer := time.NewTimer(interval)
+		swapped := false
+		for !swapped {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+				swapped = true
+			case <-time.After(300 * time.Millisecond):
+				if get() != last {
+					swapped = true
+				}
+			}
+		}
+		timer.Stop()
+	}
 }
 
 // Reload 从磁盘重新读取配置并热重载。
@@ -371,6 +456,33 @@ func (a *App) restoreAllOnExit() {
 	for _, name := range limited {
 		if err := engine.ForceResume(ctx, name); err != nil {
 			a.logf("warn", "恢复策略 %s 失败: %v", name, err)
+		}
+	}
+}
+
+// checkClientAuth 在后台对支持自检的客户端做一次认证能力检查。
+//
+// 放在后台是为了不阻塞启动：这一步需要连上客户端拿版本号，
+// 客户端暂时不可用时不应当拖慢整个进程的启动。
+func (a *App) checkClientAuth() {
+	type checker interface {
+		CheckAuthOnStartup(ctx context.Context) string
+	}
+
+	a.mu.RLock()
+	clients := a.registry.All()
+	a.mu.RUnlock()
+
+	for _, m := range clients {
+		c, ok := m.Client.(checker)
+		if !ok {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		msg := c.CheckAuthOnStartup(ctx)
+		cancel()
+		if msg != "" {
+			a.logf("warn", "%s", msg)
 		}
 	}
 }
