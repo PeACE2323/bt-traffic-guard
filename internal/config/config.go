@@ -378,8 +378,18 @@ func ParseDuration(s string) (Duration, error) {
 // ---------------------------------------------------------------------------
 
 // Default 返回一份带合理默认值的配置，用于首次启动生成 config.yaml。
+//
+// 设计取舍：默认配置应当是【无害的】。
+//   - 下载器：给出一份「示例」客户端，但 enabled 为 false。
+//     若默认启用并指向一个虚构地址（如 192.168.1.10），
+//     用户第一次打开面板只会看到两个红色的错误，不知从何下手。
+//   - 策略：默认【不启用】。这是更重要的取舍 ——
+//     策略一旦启用且用户没注意到，就会在流量达标后
+//     静默把上传限速到 1 MiB/s，这类「悄悄限速」最难排查。
+//     用户明确配置好并使用「测试限速」验证过之后再启用。
 func Default() *Config {
 	yes := true
+	no := false
 	return &Config{
 		Listen:        ":8080",
 		DataDir:       "/data",
@@ -394,7 +404,7 @@ func Default() *Config {
 				URL:             "http://192.168.1.10:8080",
 				Username:        "admin",
 				Password:        "adminadmin",
-				Enabled:         &yes,
+				Enabled:         &no, // 示例条目，需用户在面板里填好地址后手动启用
 				Timeout:         Duration(10 * time.Second),
 				UploadLimitIPv4: 0,
 				UploadLimitIPv6: 0,
@@ -405,7 +415,7 @@ func Default() *Config {
 				URL:             "http://192.168.1.10:9091",
 				Username:        "",
 				Password:        "",
-				Enabled:         &yes,
+				Enabled:         &no, // 同上，示例条目默认不启用
 				Timeout:         Duration(10 * time.Second),
 				UploadLimitIPv4: 0,
 				UploadLimitIPv6: 0,
@@ -414,7 +424,7 @@ func Default() *Config {
 		Policies: []PolicyConfig{
 			{
 				Name:                "daily-500g",
-				Enabled:             &yes,
+				Enabled:             &no, // 需用户确认阈值后再启用，避免「悄悄限速」
 				Clients:             []string{"*"},
 				Window:              Duration(24 * time.Hour),
 				Align:               "day",

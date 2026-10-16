@@ -218,6 +218,12 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Default()
+			// 这些用例校验的是「用户配置有误」的场景，
+			// 而默认的示例条目是禁用的，需先启用才谈得上被校验。
+			if len(cfg.Clients) > 0 {
+				en := true
+				cfg.Clients[0].Enabled = &en
+			}
 			tc.mut(cfg)
 			if err := cfg.Validate(); err == nil {
 				t.Errorf("期望校验失败，但通过了")
@@ -228,6 +234,44 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 	// 默认配置本身必须是合法的
 	if err := Default().Validate(); err != nil {
 		t.Errorf("默认配置应当合法，却报错: %v", err)
+	}
+}
+
+// TestDefaultIsHarmless 验证默认配置是「无害」的。
+//
+// 这是一条产品约束，不是纯粹的代码细节：
+//   - 示例下载器若默认启用并指向虚构地址（192.168.1.10），
+//     新用户第一次打开面板只会看到一片红色错误，不知从何下手；
+//   - 限速策略若默认启用，用户配置好真实下载器后若没注意到它，
+//     会在流量达标后被【静默限速到 1 MiB/s】——
+//     这类「悄悄改行为」的问题最难排查，必须从默认值上避免。
+func TestDefaultIsHarmless(t *testing.T) {
+	cfg := Default()
+
+	if len(cfg.Clients) == 0 {
+		t.Fatal("默认配置应包含示例下载器，供用户参考字段格式")
+	}
+	for _, c := range cfg.Clients {
+		if c.IsEnabled() {
+			t.Errorf("默认下载器 %q 不应启用（会指向虚构地址并在面板上报错）", c.Name)
+		}
+	}
+
+	if len(cfg.Policies) == 0 {
+		t.Fatal("默认配置应包含示例策略")
+	}
+	for _, p := range cfg.Policies {
+		if p.IsEnabled() {
+			t.Errorf("默认策略 %q 不应启用（会导致静默限速）", p.Name)
+		}
+	}
+
+	// 通知与面板认证默认关闭，避免产生用户未预期的对外行为
+	if cfg.Notify.Enabled {
+		t.Error("默认不应启用通知")
+	}
+	if cfg.WebAuth.Enabled {
+		t.Error("默认不应启用面板认证")
 	}
 }
 

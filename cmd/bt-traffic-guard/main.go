@@ -109,7 +109,12 @@ func (a *App) Bootstrap() error {
 		if err := config.Save(a.configPath, cfg); err != nil {
 			return fmt.Errorf("%w\n\n%s", err, writableHint(filepath.Dir(a.configPath)))
 		}
-		a.log.Info("已生成默认配置文件，请按需修改", "path", a.configPath)
+		a.log.Info("已生成默认配置文件", "path", a.configPath)
+		// 首次启动给出明确的下一步指引。
+		// 生成的示例下载器与示例策略都是【未启用】状态，
+		// 用户需要先填好地址再启用，否则面板上会是空的。
+		a.log.Info("首次使用：打开 Web 面板 →「配置」标签页 → 填写下载器地址与凭据 → 保存")
+		a.log.Info("注意：默认的下载器与限速策略都是未启用状态，需要你确认后再启用")
 	}
 	a.applyConfig(cfg, true)
 
