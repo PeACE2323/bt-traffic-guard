@@ -316,16 +316,16 @@ func (e *Engine) Evaluate(ctx context.Context) {
 	now := time.Now()
 
 	for _, rt := range policies {
-		if !rt.cfg.IsEnabled() {
-			continue
-		}
-
-		// --- 1. 周期滚动检查 ---
+		// 周期滚动必须先于「是否启用」的判断。
 		//
-		// 注意：滚动必须「推进到当前时刻所在的那个周期」，而不是简单地
-		// windowStart = windowEnd。否则当进程休眠、或一个周期内多次求值时，
-		// 新周期边界可能仍然落在过去，导致每个 tick 都重复滚动、
-		// 累计量被反复清零，策略永远无法稳定触发。
+		// 原因：总览页的「周期累计」读的是 monitor 的计数器，
+		// 而计数器只在 rollWindow 里清零。若这里先 continue，
+		// 禁用的策略就永远不会滚动周期，
+		// 界面会一直显示历史累计总量（例如昨天的 2.03 TiB），
+		// 让人误以为「今天的流量已经这么多了」。
+		//
+		// 滚动本身只做计数与边界推进，不会下发限速，
+		// 因此对禁用的策略执行它是安全的。
 		if rt.windowEnd.IsZero() || !now.Before(rt.windowEnd) {
 			e.rollWindow(ctx, rt, now, startedAt, loc)
 		}

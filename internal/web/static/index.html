@@ -101,13 +101,26 @@
   .cell-main{font-weight:600}
   .cell-sub{display:flex; flex-direction:column; align-items:flex-end; gap:1px; margin-top:2px}
   .cell-sub .fam{justify-content:flex-end}
+  /* 数字 + 单位下拉的组合输入框 */
+  .numfield{display:flex; gap:6px; align-items:stretch}
+  .numfield .num-in{flex:1 1 auto; min-width:0}
+  .numfield .num-unit{
+    flex:0 0 auto; width:78px; padding:0 6px;
+    background:var(--input-bg); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; font-size:13px;
+  }
   .dot{width:8px;height:8px;border-radius:50%;flex:none}
   .dot.v4{background:var(--v4)} .dot.v6{background:var(--v6)} .dot.unk{background:var(--unk)}
   table{width:100%; border-collapse:collapse; font-size:13px}
   th,td{text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:middle}
   th{color:var(--muted); font-weight:500; font-size:12px; text-transform:uppercase; letter-spacing:.4px}
   tr:last-child td{border-bottom:none}
-  td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
+  /* 数值列右对齐。
+     注意 th 与 td 必须写在同一条规则里 ——
+     只写 td.num 的话 <th class="num"> 匹配不到，
+     表头会回落成上面的 text-align:left，
+     于是「标题在左、数字在右」看起来就不对齐了。 */
+  th.num,td.num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
   .bar{height:6px; border-radius:4px; background:var(--panel2); overflow:hidden; margin-top:6px}
   .bar>i{display:block; height:100%; border-radius:4px; background:var(--accent); transition:width .4s}
   .bar>i.v4{background:var(--v4)} .bar>i.v6{background:var(--v6)}
@@ -115,7 +128,15 @@
   canvas{width:100%; display:block}
   .legend{display:flex; gap:16px; font-size:12px; color:var(--muted); margin-top:8px; flex-wrap:wrap}
   .legend span{display:flex; align-items:center; gap:6px}
-  .tabs{display:flex; gap:6px; margin-bottom:14px; border-bottom:1px solid var(--line); flex-wrap:wrap}
+  /* 标签栏（总览 / 策略 / 事件日志 / 配置）也固定在顶部，
+     紧贴在 header 下方。这样滚动页面时「总览」等标题不会被内容盖住。 */
+  .tabs{
+    display:flex; gap:6px; margin-bottom:14px;
+    border-bottom:1px solid var(--line); flex-wrap:wrap;
+    position:sticky; top:var(--header-h, 56px); z-index:15;
+    background:var(--header-bg); backdrop-filter:blur(10px);
+    padding-top:4px;
+  }
   .tab{
     padding:8px 15px; cursor:pointer; color:var(--muted); border:none; background:none;
     border-bottom:2px solid transparent; border-radius:0; margin-bottom:-1px
@@ -1021,6 +1042,11 @@ async function fetchHistory(client) {
 }
 
 function renderCharts(samples) {
+  // 这里必须自己取一次配色 —— 之前误用了 drawAreaChart 内部的局部变量 tc，
+  // 导致 ReferenceError，被 tick() 的 catch 吞掉后顶栏显示「连接失败」，
+  // 而其实所有接口都正常。
+  const tc = themeColors();
+
   const speedSeries = [
     { color: tc.v4, data: samples.map(s => (s.up && s.up.ipv4) || 0) },
     { color: tc.v6, data: samples.map(s => (s.up && s.up.ipv6) || 0) },
@@ -1036,25 +1062,38 @@ function renderCharts(samples) {
   });
 
   drawAreaChart($("chart-cum"), [
-    { color: "#e3b341", data: samples.map(s => s.win || 0), width: 2 }
+    { color: tc.warn, data: samples.map(s => s.win || 0), width: 2 }
   ], {});
 }
 
 async function tick() {
+  // 分两段 try：
+  //   1) 取数据 + 渲染主要区域 —— 失败说明确实连不上后端
+  //   2) 画图表 —— 失败属于前端渲染问题，不该让顶栏显示「连接失败」
+  // 之前两段合在一起，结果只要图表绘制抛异常（例如变量名写错），
+  // 顶栏就会误报「连接失败」，而实际所有接口都是好的，极难排查。
+  let st;
   try {
-    const st = await api("/api/status");
+    st = await api("/api/status");
     lastStatus = st;
     renderHeader(st);
     renderMetrics(st);
     renderClientsTable(st);
     renderPolicies(st);
-
-    const samples = await fetchHistory();
-    renderCharts(samples);
   } catch (e) {
     const badge = $("badge-conn");
     badge.className = "badge err";
     badge.textContent = "连接失败";
+    badge.title = e && e.message ? String(e.message) : "";
+    return;
+  }
+
+  try {
+    const samples = await fetchHistory();
+    renderCharts(samples);
+  } catch (e) {
+    // 数据本身已经刷新成功，这里只提示图表问题，不改变连接状态
+    console.warn("图表渲染失败:", e);
   }
 }
 
@@ -1362,6 +1401,84 @@ function applyPendingClients() {
 
 // ---------- 策略表单 ----------
 
+// ---------------------------------------------------------------------------
+// 数值输入：数字 + 单位下拉
+// ---------------------------------------------------------------------------
+//
+// 目的：让用户【只填数字】就行，不用自己拼 "5MiB" 这种字符串，
+// 也不用猜「500 到底是 500 字节还是 500 GiB」。
+//
+// 实现上仍然把「数字+单位」拼成一个字符串提交，
+// 后端原有的解析逻辑（ParseBytes / ParseBitrate）完全不用改。
+
+const SIZE_UNITS = [
+  ["", "字节"], ["KiB", "KiB"], ["MiB", "MiB"],
+  ["GiB", "GiB"], ["TiB", "TiB"],
+];
+const RATE_UNITS = [
+  ["", "B/s"], ["KiB", "KiB/s"], ["MiB", "MiB/s"],
+  ["GiB", "GiB/s"],
+];
+
+// splitValue 把已有的值（如 "5MiB"）拆成 [数字, 单位]。
+// 无法识别时整体当作数字、单位留空，避免丢数据。
+function splitValue(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!s) return ["", ""];
+  const m = s.match(/^([0-9]*\.?[0-9]+)\s*([A-Za-z/]*)$/);
+  if (!m) return [s, ""];
+  let unit = m[2] || "";
+  // 归一化常见写法：M -> MiB，MB -> MiB，K -> KiB
+  const norm = {
+    b: "", B: "", byte: "", bytes: "",
+    K: "KiB", KB: "KiB", KiB: "KiB", k: "KiB", kib: "KiB",
+    M: "MiB", MB: "MiB", MiB: "MiB", m: "MiB", mib: "MiB",
+    G: "GiB", GB: "GiB", GiB: "GiB", g: "GiB", gib: "GiB",
+    T: "TiB", TB: "TiB", TiB: "TiB", t: "TiB", tib: "TiB",
+    "B/s": "", "KB/s": "KiB", "MB/s": "MiB", "GB/s": "GiB",
+    "KiB/s": "KiB", "MiB/s": "MiB", "GiB/s": "GiB",
+  };
+  unit = norm[unit] !== undefined ? norm[unit] : unit;
+  return [m[1], unit];
+}
+
+// numField 渲染「数字输入 + 单位下拉」，并带一个实时的人类可读提示。
+function numField(field, idx, value, placeholder, units) {
+  const [num, unit] = splitValue(value);
+  const opts = units.map(([v, label]) =>
+    `<option value="${v}"${v === unit ? " selected" : ""}>${label}</option>`).join("");
+  return `<div class="numfield">
+    <input class="num-in" data-pf="${field}" data-idx="${idx}"
+           value="${esc(num)}" placeholder="${esc(placeholder || "")}" inputmode="decimal">
+    <select class="num-unit" data-unit-for="${field}" data-idx="${idx}">${opts}</select>
+  </div>`;
+}
+
+// sizeField 用于「流量」类输入（阈值）
+function sizeField(field, idx, value, placeholder) {
+  return numField(field, idx, value, placeholder, SIZE_UNITS);
+}
+// rateField 用于「速度」类输入（限速）
+function rateField(field, idx, value, placeholder) {
+  return numField(field, idx, value, placeholder, RATE_UNITS);
+}
+
+// collectNumFields 在保存前把「数字 + 单位」拼回后端认识的形式。
+// 空数字 -> 空串（表示未设置）；数字 + 空单位 -> 纯数字。
+function collectNumFields(root) {
+  const out = {};
+  root.querySelectorAll(".num-in").forEach(inp => {
+    const f = inp.getAttribute("data-pf");
+    const idx = inp.getAttribute("data-idx");
+    const sel = root.querySelector(`.num-unit[data-unit-for="${f}"][data-idx="${idx}"]`);
+    const num = (inp.value || "").trim();
+    const unit = sel ? sel.value : "";
+    out[f] = out[f] || [];
+    out[f][idx] = num === "" ? "" : num + unit;
+  });
+  return out;
+}
+
 function policyTemplate() {
   return {
     name: "", enabled: true, clients: ["*"],
@@ -1442,15 +1559,15 @@ function renderPolicyForms() {
       <div class="grid-fields">
         <div class="field">
           <label>触发阈值：合计</label>
-          <input data-pf="threshold_total" data-idx="${i}" value="${esc(p.threshold_total)}" placeholder="500GiB">
+          ${sizeField("threshold_total", i, p.threshold_total, "留空表示不判断")}
         </div>
         <div class="field">
           <label>触发阈值：仅 IPv4</label>
-          <input data-pf="threshold_ipv4" data-idx="${i}" value="${esc(p.threshold_ipv4)}" placeholder="留空表示不判断">
+          ${sizeField("threshold_ipv4", i, p.threshold_ipv4, "留空表示不判断")}
         </div>
         <div class="field">
           <label>触发阈值：仅 IPv6</label>
-          <input data-pf="threshold_ipv6" data-idx="${i}" value="${esc(p.threshold_ipv6)}" placeholder="留空表示不判断">
+          ${sizeField("threshold_ipv6", i, p.threshold_ipv6, "留空表示不判断")}
         </div>
       </div>
       <div class="fhint" style="margin:-6px 0 14px">
@@ -1460,36 +1577,36 @@ function renderPolicyForms() {
       <div class="grid-fields">
         <div class="field">
           <label>限速值：全局</label>
-          <input data-pf="limit_total" data-idx="${i}" value="${esc(p.limit_total)}" placeholder="1MiB">
-          <div class="fhint">如 <code>1MiB</code>（=1 MiB/s）、<code>512K</code>；留空或 <code>0</code> 表示不限速。</div>
+          ${rateField("limit_total", i, p.limit_total, "0 = 不限速")}
+          <div class="fhint">触发限速后把上传压到这个速度。</div>
         </div>
         <div class="field">
           <label>限速值：仅 IPv4</label>
-          <input data-pf="limit_ipv4" data-idx="${i}" value="${esc(p.limit_ipv4)}" placeholder="留空">
+          ${rateField("limit_ipv4", i, p.limit_ipv4, "留空")}
         </div>
         <div class="field">
           <label>限速值：仅 IPv6</label>
-          <input data-pf="limit_ipv6" data-idx="${i}" value="${esc(p.limit_ipv6)}" placeholder="留空">
+          ${rateField("limit_ipv6", i, p.limit_ipv6, "留空")}
         </div>
       </div>
 
       <div class="grid-fields">
         <div class="field">
           <label>解除限速后的速度（全局）</label>
-          <input data-pf="resume_limit_total" data-idx="${i}" value="${esc(p.resume_limit_total)}" placeholder="留空 = 恢复到原限速">
+          ${rateField("resume_limit_total", i, p.resume_limit_total, "留空 = 恢复原限速")}
           <div class="fhint">
-            周期结束后回到的速度，如 <code>5MiB</code>（= 5 MiB/s）。<br>
+            周期结束后回到的速度。<br>
             <b>留空</b>：恢复到触发前的原始限速（通常完全不限速）。<br>
-            填 <code>0</code>：显式表示不限速。
+            填 <b>0</b>：显式表示不限速。
           </div>
         </div>
         <div class="field">
           <label>解除限速后的速度：仅 IPv4</label>
-          <input data-pf="resume_limit_ipv4" data-idx="${i}" value="${esc(p.resume_limit_ipv4)}" placeholder="留空">
+          ${rateField("resume_limit_ipv4", i, p.resume_limit_ipv4, "留空")}
         </div>
         <div class="field">
           <label>解除限速后的速度：仅 IPv6</label>
-          <input data-pf="resume_limit_ipv6" data-idx="${i}" value="${esc(p.resume_limit_ipv6)}" placeholder="留空">
+          ${rateField("resume_limit_ipv6", i, p.resume_limit_ipv6, "留空")}
         </div>
       </div>
 
@@ -1554,13 +1671,36 @@ function bindPolicyFormEvents() {
 function collectPolicyInputs() {
   if (!currentForm) return;
   const list = currentForm.policies || [];
+
+  // 数值字段现在是「数字输入框 + 单位下拉」两个元素，
+  // 不能只读 el.value，必须拼回 "5MiB" 这样的形式。
+  const numFields = new Set([
+    "threshold_total", "threshold_ipv4", "threshold_ipv6",
+    "limit_total", "limit_ipv4", "limit_ipv6",
+    "resume_limit_total", "resume_limit_ipv4", "resume_limit_ipv6",
+  ]);
+
   document.querySelectorAll("[data-pf]").forEach(el => {
+    const key = el.getAttribute("data-pf");
+    // 单位下拉自身不是数据源，跳过
+    if (!key || el.classList.contains("num-unit")) return;
+
     const i = Number(el.getAttribute("data-idx"));
     if (!list[i]) return;
-    const key = el.getAttribute("data-pf");
+
+    if (numFields.has(key)) {
+      const sel = document.querySelector(
+        `.num-unit[data-unit-for="${key}"][data-idx="${i}"]`);
+      const num = (el.value || "").trim();
+      const unit = sel ? sel.value : "";
+      list[i][key] = num === "" ? "" : num + unit;
+      return;
+    }
+
     if (el.type === "checkbox") list[i][key] = el.checked;
     else list[i][key] = el.value;
   });
+
   currentForm.policies = list;
 }
 
@@ -1803,6 +1943,23 @@ $("btn-theme").addEventListener("click", () => {
     fetchHistory().then(renderCharts).catch(() => {});
   }
 });
+
+// ---------------------------------------------------------------------------
+// 顶栏高度同步
+// ---------------------------------------------------------------------------
+
+// 标签栏用 --header-h 把自己贴在顶栏下方。
+// 顶栏在窄屏会换行导致高度变化，所以用 JS 实测高度而不是写死数值。
+function syncHeaderHeight() {
+  const h = document.querySelector("header");
+  if (!h) return;
+  const px = Math.ceil(h.getBoundingClientRect().height);
+  if (px > 0) document.documentElement.style.setProperty("--header-h", px + "px");
+}
+syncHeaderHeight();
+window.addEventListener("resize", syncHeaderHeight);
+// 顶栏内容会随运行状态变化（如「已限速」标签出现），也需要重新量一次
+setInterval(syncHeaderHeight, 2000);
 
 $("btn-evt-refresh").addEventListener("click", refreshEvents);
 
