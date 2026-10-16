@@ -114,6 +114,63 @@
   .empty{color:var(--muted); padding:26px; text-align:center; font-size:13px}
   code{background:var(--panel2); padding:1px 6px; border-radius:5px; font-size:12.5px}
   .hint{color:var(--muted); font-size:12.5px; margin-top:10px; line-height:1.7}
+
+  /* ---------- 图形化配置表单 ---------- */
+  .subtabs{display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap}
+  .subtab{
+    padding:6px 14px; cursor:pointer; color:var(--muted); background:var(--panel);
+    border:1px solid var(--line); border-radius:20px; font-size:13px
+  }
+  .subtab:hover{color:var(--fg); border-color:var(--accent); background:var(--panel)}
+  .subtab.active{color:#03121f; background:var(--accent); border-color:var(--accent); font-weight:600}
+  .subview{display:none} .subview.active{display:block}
+
+  .field{margin-bottom:14px}
+  .field > label{
+    display:block; font-size:12.5px; color:var(--muted); margin-bottom:5px; font-weight:500
+  }
+  .field input[type=text], .field input[type=password], .field input[type=number],
+  .field input:not([type]), .field select, .field textarea{
+    width:100%; background:#0d131d; color:var(--fg); border:1px solid var(--line);
+    border-radius:7px; padding:8px 11px; font:inherit; font-size:13.5px; transition:border-color .15s
+  }
+  .field input:focus, .field select:focus{
+    outline:none; border-color:var(--accent)
+  }
+  .field input::placeholder{color:#4d5c72}
+  .fhint{color:var(--muted); font-size:11.5px; margin-top:4px; line-height:1.6}
+  .checkline{display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13.5px; color:var(--fg)}
+  .checkline input[type=checkbox]{
+    width:auto; margin:0; accent-color:var(--accent); cursor:pointer; width:16px; height:16px
+  }
+  .checkrow{display:flex; gap:18px; flex-wrap:wrap}
+
+  .client-card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    padding:16px; margin-bottom:14px
+  }
+  .client-card.disabled{opacity:.6}
+  .client-head{
+    display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap;
+    padding-bottom:12px; border-bottom:1px solid var(--line)
+  }
+  .client-head .title{font-weight:600; font-size:14.5px}
+  .grid-fields{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:0 16px}
+  .grid-fields .span2{grid-column:span 2}
+  @media(max-width:640px){ .grid-fields .span2{grid-column:span 1} }
+
+  .keyrow{display:flex; gap:8px; align-items:flex-start}
+  .keyrow input{flex:1}
+  .banner{
+    padding:10px 13px; border-radius:8px; font-size:12.5px; line-height:1.65;
+    border:1px solid var(--line); background:var(--panel2); color:var(--muted); margin-bottom:14px
+  }
+  .banner.tip{border-color:rgba(76,154,255,.35); background:rgba(76,154,255,.08); color:#a8c9ff}
+  .banner.warn{border-color:rgba(227,179,65,.35); background:rgba(227,179,65,.08); color:#f0d38a}
+  .banner b{color:var(--fg)}
+  .status-dot{width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px}
+  .status-dot.ok{background:var(--ok)} .status-dot.bad{background:var(--err)}
+  .status-dot.wait{background:var(--muted)}
   .ev{display:flex; gap:11px; padding:9px 0; border-bottom:1px solid var(--line); font-size:13px}
   .ev:last-child{border-bottom:none}
   .ev time{color:var(--muted); font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums}
@@ -218,19 +275,221 @@
 
   <!-- ================= 配置 ================= -->
   <section class="view" id="view-cfg">
-    <div class="card">
-      <div class="row" style="margin-bottom:12px">
-        <h2 style="margin:0">配置文件（YAML）</h2>
-        <div style="display:flex; gap:8px">
-          <button id="btn-cfg-reload">重新载入</button>
-          <button class="primary" id="btn-cfg-save">保存并应用</button>
+    <div class="subtabs">
+      <button class="subtab active" data-sub="clients">下载器</button>
+      <button class="subtab" data-sub="policies">限速策略</button>
+      <button class="subtab" data-sub="general">通用与通知</button>
+      <button class="subtab" data-sub="yaml">高级（YAML）</button>
+    </div>
+
+    <!-- ---------- 下载器 ---------- -->
+    <div class="subview active" id="sub-clients">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row">
+          <div>
+            <h2 style="margin:0 0 4px">下载器连接</h2>
+            <div class="sub" style="margin:0">
+              在这里填写 qBittorrent / Transmission 的地址与凭据，保存后立即生效，无需设置环境变量。
+            </div>
+          </div>
+          <button class="primary" id="btn-add-client">+ 添加下载器</button>
         </div>
       </div>
-      <textarea id="cfg-text" spellcheck="false"></textarea>
-      <div class="hint">
-        保存后会立即热重载，无需重启容器。修改 <code>poll_interval</code>、阈值、限速值都会即时生效。<br>
-        阈值与限速均可使用友好写法：阈值如 <code>500GiB</code>、<code>1.5TB</code>；限速单位是<strong>字节/秒</strong>（如 <code>1048576</code> = 1 MiB/s，<code>0</code> = 不限速）。<br>
-        周期 <code>window</code> 支持 <code>24h</code> / <code>7d</code> / <code>30d</code>；<code>align</code> 可选 <code>day</code>（自然日）、<code>week</code>、<code>month</code>、<code>hour</code> 或 <code>rolling</code>（滚动窗口）。
+      <div id="client-forms"></div>
+      <div class="card" style="margin-top:14px">
+        <div class="row">
+          <div class="hint" style="margin:0">修改后点击右侧按钮保存。保存会即时热重载，不会中断正在进行的监控。</div>
+          <button class="primary" id="btn-save-clients">保存下载器配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 策略 ---------- -->
+    <div class="subview" id="sub-policies">
+      <div class="card" style="margin-bottom:14px">
+        <div class="row">
+          <div>
+            <h2 style="margin:0 0 4px">限速策略</h2>
+            <div class="sub" style="margin:0">
+              在指定周期内，上传流量达到阈值时自动限速；进入新周期后自动解除。
+            </div>
+          </div>
+          <button class="primary" id="btn-add-policy">+ 添加策略</button>
+        </div>
+      </div>
+      <div id="policy-forms"></div>
+      <div class="card" style="margin-top:14px">
+        <div class="row">
+          <div class="hint" style="margin:0">至少需要保留一条策略。</div>
+          <button class="primary" id="btn-save-policies">保存策略配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 通用与通知 ---------- -->
+    <div class="subview" id="sub-general">
+      <div class="grid two">
+        <div class="card">
+          <h2>通用设置</h2>
+          <div class="field">
+            <label>Web 面板端口</label>
+            <input id="f-listen" placeholder=":8080">
+            <div class="fhint">格式为 <code>:端口</code>。改动需要重启容器才会生效。</div>
+          </div>
+          <div class="field">
+            <label>采集间隔</label>
+            <input id="f-poll" placeholder="5s">
+            <div class="fhint">越小曲线越平滑，但对下载器 API 压力越大。建议 3s ~ 10s。</div>
+          </div>
+          <div class="field">
+            <label>日志级别</label>
+            <select id="f-loglevel">
+              <option value="debug">debug（排查问题）</option>
+              <option value="info">info（默认）</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>时区</label>
+            <input id="f-timezone" placeholder="Asia/Shanghai">
+            <div class="fhint">影响「自然日 / 自然周 / 自然月」的起算时刻，务必设置正确。</div>
+          </div>
+          <div class="field">
+            <label>曲线保留点数</label>
+            <input id="f-history" type="number" min="60" max="10000" placeholder="720">
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>面板认证</h2>
+          <div class="field">
+            <label class="checkline">
+              <input type="checkbox" id="f-auth-enabled">
+              <span>启用面板登录认证</span>
+            </label>
+            <div class="fhint">强烈建议在可被外网访问的环境下开启。</div>
+          </div>
+          <div class="field">
+            <label>用户名</label>
+            <input id="f-auth-user" placeholder="admin">
+          </div>
+          <div class="field">
+            <label>密码</label>
+            <input id="f-auth-pass" type="password" placeholder="留空表示不修改已保存的密码">
+          </div>
+
+          <h2 style="margin-top:20px">通知</h2>
+          <div class="field">
+            <label class="checkline">
+              <input type="checkbox" id="f-notify-enabled">
+              <span>启用通知</span>
+            </label>
+          </div>
+          <div class="field" id="f-notify-on-wrap">
+            <label>推送哪些事件</label>
+            <div class="checkrow">
+              <label class="checkline"><input type="checkbox" data-notify-on="speedup"><span>触发限速</span></label>
+              <label class="checkline"><input type="checkbox" data-notify-on="resume"><span>解除限速</span></label>
+              <label class="checkline"><input type="checkbox" data-notify-on="error"><span>执行失败</span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid two" style="margin-top:14px">
+        <div class="card">
+          <h2>ntfy 推送</h2>
+          <div class="field">
+            <label class="checkline">
+              <input type="checkbox" id="f-ntfy-enabled">
+              <span>启用 ntfy</span>
+            </label>
+          </div>
+          <div class="field">
+            <label>服务地址</label>
+            <input id="f-ntfy-url" placeholder="https://ntfy.sh">
+            <div class="fhint">自建服务填你的地址，例如 <code>http://192.168.1.10:8081</code>。</div>
+          </div>
+          <div class="field">
+            <label>Topic</label>
+            <input id="f-ntfy-topic" placeholder="bt-traffic-guard">
+            <div class="fhint">手机端 ntfy App 订阅同一个 topic 即可收到推送。</div>
+          </div>
+          <div class="field">
+            <label>访问令牌（可选）</label>
+            <input id="f-ntfy-token" type="password" placeholder="留空表示不修改">
+          </div>
+          <div class="field">
+            <label>优先级</label>
+            <select id="f-ntfy-priority">
+              <option value="min">min</option>
+              <option value="low">low</option>
+              <option value="default">default</option>
+              <option value="high">high</option>
+              <option value="urgent">urgent</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Webhook 推送</h2>
+          <div class="field">
+            <label class="checkline">
+              <input type="checkbox" id="f-webhook-enabled">
+              <span>启用 Webhook</span>
+            </label>
+          </div>
+          <div class="field">
+            <label>地址</label>
+            <input id="f-webhook-url" placeholder="https://discord.com/api/webhooks/...">
+          </div>
+          <div class="field">
+            <label>格式</label>
+            <select id="f-webhook-format">
+              <option value="generic">generic（通用 JSON）</option>
+              <option value="discord">discord</option>
+              <option value="slack">slack</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>请求方法</label>
+            <select id="f-webhook-method">
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:14px">
+        <div class="row">
+          <div class="hint" style="margin:0">保存后立即生效。</div>
+          <button class="primary" id="btn-save-general">保存通用与通知配置</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- 高级 YAML ---------- -->
+    <div class="subview" id="sub-yaml">
+      <div class="card">
+        <div class="row" style="margin-bottom:12px">
+          <div>
+            <h2 style="margin:0 0 4px">配置文件（YAML）</h2>
+            <div class="sub" style="margin:0">适合需要批量修改或使用未在表单中暴露的高级选项的场景。</div>
+          </div>
+          <div style="display:flex; gap:8px">
+            <button id="btn-cfg-reload">重新载入</button>
+            <button class="primary" id="btn-cfg-save">保存并应用</button>
+          </div>
+        </div>
+        <textarea id="cfg-text" spellcheck="false"></textarea>
+        <div class="hint">
+          保存后会立即热重载，无需重启容器。修改 <code>poll_interval</code>、阈值、限速值都会即时生效。<br>
+          阈值与限速均可使用友好写法：阈值如 <code>500GiB</code>、<code>1.5TB</code>；限速如 <code>1MiB</code>、<code>512K</code>，<code>0</code> = 不限速。<br>
+          周期 <code>window</code> 支持 <code>24h</code> / <code>7d</code> / <code>30d</code>；<code>align</code> 可选 <code>day</code>（自然日）、<code>week</code>、<code>month</code>、<code>hour</code> 或 <code>rolling</code>（滚动窗口）。<br>
+          <strong>注意：</strong>表单与 YAML 是同一份配置，两边随时可以互相切换，改动都会同步。
+        </div>
       </div>
     </div>
   </section>
@@ -770,6 +1029,552 @@ async function loadConfig() {
   }
 }
 
+// ===========================================================================
+// 图形化配置表单
+// ===========================================================================
+
+// 服务端用于表示「此字段未修改」的掩码值，必须与 internal/web/form.go 一致。
+const PASSWORD_MASK = "\u0000__UNCHANGED__\u0000";
+// 服务端用于表示「显式清空此字段」的哨兵值，必须与 internal/web/form.go 一致。
+const CLEAR_TOKEN = "\u0000__CLEAR__\u0000";
+
+// currentForm 保存最近一次从服务端读到的表单数据。
+let currentForm = null;
+
+// fetchForm 读取结构化配置。
+async function fetchForm() {
+  currentForm = await api("/api/config/form");
+  return currentForm;
+}
+
+// saveForm 提交结构化配置。
+async function saveForm(patch) {
+  const body = Object.assign({}, currentForm, patch);
+  const r = await api("/api/config/form", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  currentForm = r.config;
+  return r;
+}
+
+// ---------- 下载器表单 ----------
+
+// clientTemplate 返回一个空白客户端的默认值。
+function clientTemplate() {
+  return {
+    name: "", type: "qbittorrent", url: "", username: "", password: "",
+    api_key: "", enabled: true, insecure_skip_verify: false, timeout: "10s",
+    upload_limit_ipv4: 0, upload_limit_ipv6: 0,
+    auth_mode: "无认证", has_password: false, has_api_key: false,
+    api_key_hint: "", supports_api_key: true
+  };
+}
+
+// renderClientForms 渲染下载器配置卡片。
+function renderClientForms() {
+  const list = (currentForm && currentForm.clients) || [];
+  const box = $("client-forms");
+
+  if (!list.length) {
+    box.innerHTML = '<div class="card"><div class="empty">还没有配置下载器，点击右上角「添加下载器」开始。</div></div>';
+    return;
+  }
+
+  let html = "";
+  list.forEach((c, i) => {
+    const statusDot = c.healthy === true
+      ? '<span class="status-dot ok"></span>正常'
+      : (c.status_text === "等待首次采集"
+        ? '<span class="status-dot wait"></span>等待采集'
+        : `<span class="status-dot bad"></span>${esc(c.status_text || "未知")}`);
+
+    html += `<div class="client-card ${c.enabled ? "" : "disabled"}" data-idx="${i}">
+      <div class="client-head">
+        <span class="title">${esc(c.name || "新下载器")}</span>
+        <span class="pill">${esc(c.type === "qbittorrent" ? "qBittorrent" : "Transmission")}</span>
+        <span class="pill">认证：${esc(c.auth_mode || "无认证")}</span>
+        <span class="sub" style="margin:0">${statusDot}</span>
+        ${c.up_speed > 0 ? `<span class="sub" style="margin:0">↑ ${fmtBytes(c.up_speed)}/s</span>` : ""}
+        <div class="spacer" style="flex:1"></div>
+        <button class="danger" data-remove-client="${i}" style="padding:4px 11px; font-size:12.5px">删除</button>
+      </div>
+
+      ${c.last_error ? `<div class="banner warn">最近一次错误：${esc(c.last_error)}</div>` : ""}
+
+      <div class="grid-fields">
+        <div class="field">
+          <label>名称（唯一标识）</label>
+          <input data-cf="name" data-idx="${i}" value="${esc(c.name)}" placeholder="qbittorrent">
+          <div class="fhint">策略通过这个名字指定作用对象，建议用英文。</div>
+        </div>
+
+        <div class="field">
+          <label>类型</label>
+          <select data-cf="type" data-idx="${i}">
+            <option value="qbittorrent"${c.type === "qbittorrent" ? " selected" : ""}>qBittorrent</option>
+            <option value="transmission"${c.type === "transmission" ? " selected" : ""}>Transmission</option>
+          </select>
+        </div>
+
+        <div class="field span2">
+          <label>地址</label>
+          <input data-cf="url" data-idx="${i}" value="${esc(c.url)}"
+                 placeholder="${c.type === "qbittorrent" ? "http://192.168.1.10:8080" : "http://192.168.1.10:9091"}">
+          <div class="fhint">
+            ${c.type === "qbittorrent"
+              ? "qBittorrent 的 WebUI 地址。"
+              : "Transmission 填根地址即可，程序会自动补上 /transmission/rpc。"}
+            <b>容器用 bridge 网络时不能填 127.0.0.1</b>，那指向容器自身；请填 NAS 的局域网 IP。
+          </div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="checkline">
+          <input type="checkbox" data-cf="enabled" data-idx="${i}" ${c.enabled ? "checked" : ""}>
+          <span>启用这个下载器</span>
+        </label>
+      </div>
+
+      ${renderAuthFields(c, i)}
+
+      <details style="margin-top:6px">
+        <summary style="cursor:pointer; color:var(--muted); font-size:12.5px">高级选项</summary>
+        <div class="grid-fields" style="margin-top:12px">
+          <div class="field">
+            <label>请求超时</label>
+            <input data-cf="timeout" data-idx="${i}" value="${esc(c.timeout || "10s")}" placeholder="10s">
+          </div>
+          <div class="field">
+            <label class="checkline" style="margin-top:22px">
+              <input type="checkbox" data-cf="insecure_skip_verify" data-idx="${i}"
+                     ${c.insecure_skip_verify ? "checked" : ""}>
+              <span>跳过 TLS 证书校验</span>
+            </label>
+            <div class="fhint">使用自签名 HTTPS 证书时勾选。</div>
+          </div>
+        </div>
+      </details>
+    </div>`;
+  });
+
+  box.innerHTML = html;
+  bindClientFormEvents();
+}
+
+// renderAuthFields 生成认证相关的输入区。
+//
+// qBittorrent 优先推荐 API Key（5.2.0+），同时保留用户名密码作为兼容路径。
+function renderAuthFields(c, i) {
+  const isQB = c.type === "qbittorrent";
+
+  if (!isQB) {
+    return `<div class="grid-fields">
+      <div class="field">
+        <label>用户名（可选）</label>
+        <input data-cf="username" data-idx="${i}" value="${esc(c.username)}" placeholder="留空表示无认证">
+      </div>
+      <div class="field">
+        <label>密码（可选）</label>
+        <input type="password" data-cf="password" data-idx="${i}"
+               value="${c.has_password ? PASSWORD_MASK : ""}"
+               placeholder="${c.has_password ? "已保存，留空表示不修改" : "留空表示无认证"}">
+      </div>
+    </div>
+    <div class="banner">Transmission 只支持用户名密码（RPC 基本认证），不支持 API Key。</div>`;
+  }
+
+  return `<div class="banner tip">
+    <b>认证方式二选一，填了 API Key 就优先用它。</b><br>
+    • <b>API Key</b>（推荐，qBittorrent 5.2.0+）：在 qBittorrent 的「设置 → WebUI → API Key」点生成，
+      复制 <code>qbt_</code> 开头的字符串填到下面。无状态认证，不受 IP 封禁影响。<br>
+    • <b>用户名密码</b>：适用于 5.2.0 以下版本。注意连续登录失败会触发 IP 临时封禁。
+  </div>
+
+  <div class="field">
+    <label>API Key${c.has_api_key ? "（已保存：" + esc(c.api_key_hint) + "）" : ""}</label>
+    <div class="keyrow">
+      <input type="password" data-cf="api_key" data-idx="${i}"
+             value="${c.has_api_key ? PASSWORD_MASK : ""}"
+             placeholder="${c.has_api_key ? "已保存，留空表示不修改" : "qbt_xxxxxxxxxxxxxxxxxxxxxxxxxxxx"}">
+      <button data-toggle-key="${i}" style="padding:8px 12px; white-space:nowrap">显示</button>
+      ${c.has_api_key ? `<button class="danger" data-clear-key="${i}" style="padding:8px 12px; white-space:nowrap">清除</button>` : ""}
+    </div>
+    <div class="fhint">留空表示不使用 API Key，将回退到下面的用户名密码登录。</div>
+  </div>
+
+  <div class="grid-fields">
+    <div class="field">
+      <label>用户名</label>
+      <input data-cf="username" data-idx="${i}" value="${esc(c.username)}" placeholder="admin">
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input type="password" data-cf="password" data-idx="${i}"
+             value="${c.has_password ? PASSWORD_MASK : ""}"
+             placeholder="${c.has_password ? "已保存，留空表示不修改" : "adminadmin"}">
+    </div>
+  </div>`;
+}
+
+// bindClientFormEvents 绑定下载器表单的交互。
+function bindClientFormEvents() {
+  // 删除
+  document.querySelectorAll("[data-remove-client]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.getAttribute("data-remove-client"));
+      const name = currentForm.clients[i].name || "这个下载器";
+      if (!confirm(`确定要删除「${name}」吗？`)) return;
+      // 本地先改，等用户点保存才真正落盘
+      pendingClients.splice(i, 1);
+      applyPendingClients();
+    });
+  });
+
+  // 显示/隐藏 API Key
+  document.querySelectorAll("[data-toggle-key]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.getAttribute("data-toggle-key"));
+      const input = document.querySelector(`input[data-cf="api_key"][data-idx="${i}"]`);
+      if (!input) return;
+      if (input.type === "password") {
+        // 掩码状态下无法「显示」真实值（服务端不回传明文），
+        // 因此提示用户直接输入新值。
+        if (input.value === PASSWORD_MASK) {
+          input.value = "";
+          input.placeholder = "请输入新的 API Key";
+          toast("出于安全考虑不回显已保存的 Key，请直接粘贴新值", "ok");
+        } else {
+          input.type = "text";
+        }
+        btn.textContent = "隐藏";
+      } else {
+        input.type = "password";
+        btn.textContent = "显示";
+      }
+    });
+  });
+
+  // 清除 API Key
+  document.querySelectorAll("[data-clear-key]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.getAttribute("data-clear-key"));
+      const input = document.querySelector(`input[data-cf="api_key"][data-idx="${i}"]`);
+      // 必须发送「清空」哨兵而不是空串，
+      // 否则服务端会理解为「未修改」而保留原 Key。
+      if (input) input.value = CLEAR_TOKEN;
+      btn.remove();
+      toast("已标记为清除，点击保存后生效", "ok");
+    });
+  });
+
+  // 类型切换需要重绘（认证区不同）
+  document.querySelectorAll('select[data-cf="type"]').forEach(sel => {
+    sel.addEventListener("change", () => {
+      collectClientInputs();
+      const i = Number(sel.getAttribute("data-idx"));
+      currentForm.clients[i].type = sel.value;
+      if (sel.value !== "qbittorrent") {
+        currentForm.clients[i].supports_api_key = false;
+      } else {
+        currentForm.clients[i].supports_api_key = true;
+      }
+      renderClientForms();
+    });
+  });
+}
+
+// pendingClients 是本地编辑缓冲，避免每次输入都请求服务端。
+let pendingClients = null;
+
+// collectClientInputs 把界面上的输入收集回 currentForm.clients。
+function collectClientInputs() {
+  if (!currentForm) return;
+  const list = pendingClients || currentForm.clients;
+  document.querySelectorAll("[data-cf]").forEach(el => {
+    const i = Number(el.getAttribute("data-idx"));
+    if (!list[i]) return;
+    const key = el.getAttribute("data-cf");
+    if (el.type === "checkbox") list[i][key] = el.checked;
+    else if (el.type === "number") list[i][key] = Number(el.value) || 0;
+    else list[i][key] = el.value;
+  });
+  pendingClients = list;
+  currentForm.clients = list;
+}
+
+// applyPendingClients 用缓冲数据重绘下载器列表。
+function applyPendingClients() {
+  if (pendingClients) currentForm.clients = pendingClients;
+  renderClientForms();
+}
+
+// ---------- 策略表单 ----------
+
+function policyTemplate() {
+  return {
+    name: "", enabled: true, clients: ["*"],
+    window: "24h", align: "day",
+    threshold_total: "500GiB", threshold_ipv4: "", threshold_ipv6: "",
+    limit_total: "1MiB", limit_ipv4: "", limit_ipv6: "",
+    resume_on_window_reset: true, cooldown: "10m"
+  };
+}
+
+// renderPolicyForms 渲染策略配置卡片。
+function renderPolicyForms() {
+  const list = (currentForm && currentForm.policies) || [];
+  const box = $("policy-forms");
+  const clientNames = ((currentForm && currentForm.clients) || []).map(c => c.name).filter(Boolean);
+
+  if (!list.length) {
+    box.innerHTML = '<div class="card"><div class="empty">还没有策略，点击右上角「添加策略」。没有策略时不会触发任何限速。</div></div>';
+    return;
+  }
+
+  let html = "";
+  list.forEach((p, i) => {
+    const sel = p.clients || [];
+    const all = sel.length === 0 || sel.indexOf("*") >= 0;
+    html += `<div class="client-card" data-pidx="${i}">
+      <div class="client-head">
+        <span class="title">${esc(p.name || "新策略")}</span>
+        ${p.enabled ? '<span class="pill off">已启用</span>' : '<span class="pill">已禁用</span>'}
+        <div class="spacer" style="flex:1"></div>
+        <button class="danger" data-remove-policy="${i}" style="padding:4px 11px; font-size:12.5px">删除</button>
+      </div>
+
+      <div class="grid-fields">
+        <div class="field">
+          <label>策略名称</label>
+          <input data-pf="name" data-idx="${i}" value="${esc(p.name)}" placeholder="daily-500g">
+        </div>
+        <div class="field">
+          <label>统计周期</label>
+          <input data-pf="window" data-idx="${i}" value="${esc(p.window)}" placeholder="24h">
+          <div class="fhint">支持 <code>24h</code>、<code>7d</code>、<code>30d</code>。</div>
+        </div>
+        <div class="field">
+          <label>周期起算方式</label>
+          <select data-pf="align" data-idx="${i}">
+            <option value="day"${p.align === "day" ? " selected" : ""}>自然日（每天 00:00 重置）</option>
+            <option value="week"${p.align === "week" ? " selected" : ""}>自然周（每周一 00:00）</option>
+            <option value="month"${p.align === "month" ? " selected" : ""}>自然月（每月 1 日 00:00）</option>
+            <option value="hour"${p.align === "hour" ? " selected" : ""}>自然小时</option>
+            <option value="rolling"${p.align === "rolling" ? " selected" : ""}>滚动窗口（从启动起算）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>冷却期</label>
+          <input data-pf="cooldown" data-idx="${i}" value="${esc(p.cooldown)}" placeholder="10m">
+          <div class="fhint">触发后至少保持这么久才允许解除，避免阈值附近反复横跳。</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>作用下载器</label>
+        <div class="checkrow">
+          <label class="checkline">
+            <input type="checkbox" data-pf-clients-all="${i}" ${all ? "checked" : ""}>
+            <span>全部下载器</span>
+          </label>
+          ${clientNames.map(n => `
+            <label class="checkline">
+              <input type="checkbox" data-pf-client="${i}" data-cname="${esc(n)}"
+                     ${(!all && sel.indexOf(n) >= 0) ? "checked" : ""} ${all ? "disabled" : ""}>
+              <span>${esc(n)}</span>
+            </label>`).join("")}
+        </div>
+      </div>
+
+      <div class="grid-fields">
+        <div class="field">
+          <label>触发阈值：合计</label>
+          <input data-pf="threshold_total" data-idx="${i}" value="${esc(p.threshold_total)}" placeholder="500GiB">
+        </div>
+        <div class="field">
+          <label>触发阈值：仅 IPv4</label>
+          <input data-pf="threshold_ipv4" data-idx="${i}" value="${esc(p.threshold_ipv4)}" placeholder="留空表示不判断">
+        </div>
+        <div class="field">
+          <label>触发阈值：仅 IPv6</label>
+          <input data-pf="threshold_ipv6" data-idx="${i}" value="${esc(p.threshold_ipv6)}" placeholder="留空表示不判断">
+        </div>
+      </div>
+      <div class="fhint" style="margin:-6px 0 14px">
+        三个阈值是「或」的关系，任意一个满足就限速。至少填一个。
+      </div>
+
+      <div class="grid-fields">
+        <div class="field">
+          <label>限速值：全局</label>
+          <input data-pf="limit_total" data-idx="${i}" value="${esc(p.limit_total)}" placeholder="1MiB">
+          <div class="fhint">如 <code>1MiB</code>（=1 MiB/s）、<code>512K</code>；留空或 <code>0</code> 表示不限速。</div>
+        </div>
+        <div class="field">
+          <label>限速值：仅 IPv4</label>
+          <input data-pf="limit_ipv4" data-idx="${i}" value="${esc(p.limit_ipv4)}" placeholder="留空">
+        </div>
+        <div class="field">
+          <label>限速值：仅 IPv6</label>
+          <input data-pf="limit_ipv6" data-idx="${i}" value="${esc(p.limit_ipv6)}" placeholder="留空">
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="checkline">
+          <input type="checkbox" data-pf="enabled" data-idx="${i}" ${p.enabled ? "checked" : ""}>
+          <span>启用这条策略</span>
+        </label>
+        <label class="checkline">
+          <input type="checkbox" data-pf="resume_on_window_reset" data-idx="${i}"
+                 ${p.resume_on_window_reset ? "checked" : ""}>
+          <span>进入新周期后自动解除限速</span>
+        </label>
+      </div>
+    </div>`;
+  });
+
+  box.innerHTML = html;
+  bindPolicyFormEvents();
+}
+
+function bindPolicyFormEvents() {
+  document.querySelectorAll("[data-remove-policy]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const i = Number(btn.getAttribute("data-remove-policy"));
+      const name = currentForm.policies[i].name || "这条策略";
+      if (!confirm(`确定要删除「${name}」吗？`)) return;
+      currentForm.policies.splice(i, 1);
+      renderPolicyForms();
+    });
+  });
+
+  // 「全部下载器」与单独勾选互斥
+  document.querySelectorAll("[data-pf-clients-all]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const i = Number(cb.getAttribute("data-pf-clients-all"));
+      collectPolicyInputs();
+      currentForm.policies[i].clients = cb.checked ? ["*"] : [];
+      renderPolicyForms();
+    });
+  });
+
+  document.querySelectorAll("[data-pf-client]").forEach(cb => {
+    cb.addEventListener("change", () => {
+      const i = Number(cb.getAttribute("data-pf-client"));
+      collectPolicyInputs();
+      const p = currentForm.policies[i];
+      const name = cb.getAttribute("data-cname");
+      let sel = (p.clients || []).filter(x => x !== "*");
+      if (cb.checked) {
+        if (sel.indexOf(name) < 0) sel.push(name);
+      } else {
+        sel = sel.filter(x => x !== name);
+      }
+      // 如果一个都没选，回退到「全部」，避免出现「不作用于任何下载器」
+      p.clients = sel.length ? sel : ["*"];
+      renderPolicyForms();
+    });
+  });
+}
+
+function collectPolicyInputs() {
+  if (!currentForm) return;
+  const list = currentForm.policies || [];
+  document.querySelectorAll("[data-pf]").forEach(el => {
+    const i = Number(el.getAttribute("data-idx"));
+    if (!list[i]) return;
+    const key = el.getAttribute("data-pf");
+    if (el.type === "checkbox") list[i][key] = el.checked;
+    else list[i][key] = el.value;
+  });
+  currentForm.policies = list;
+}
+
+// ---------- 通用与通知 ----------
+
+function renderGeneralForm() {
+  const g = (currentForm && currentForm.general) || {};
+  const n = (currentForm && currentForm.notify) || {};
+
+  $("f-listen").value = g.listen || "";
+  $("f-poll").value = g.poll_interval || "";
+  $("f-loglevel").value = g.log_level || "info";
+  $("f-timezone").value = g.timezone || "";
+  $("f-history").value = g.history_points || 720;
+
+  $("f-auth-enabled").checked = !!g.auth_enabled;
+  $("f-auth-user").value = g.auth_username || "";
+  $("f-auth-pass").value = g.auth_password === PASSWORD_MASK ? PASSWORD_MASK : "";
+
+  $("f-notify-enabled").checked = !!n.enabled;
+  const on = n.notify_on || [];
+  document.querySelectorAll("[data-notify-on]").forEach(cb => {
+    cb.checked = on.indexOf(cb.getAttribute("data-notify-on")) >= 0;
+  });
+
+  $("f-ntfy-enabled").checked = !!n.ntfy_enabled;
+  $("f-ntfy-url").value = n.ntfy_url || "https://ntfy.sh";
+  $("f-ntfy-topic").value = n.ntfy_topic || "";
+  $("f-ntfy-token").value = n.ntfy_token === PASSWORD_MASK ? PASSWORD_MASK : "";
+  $("f-ntfy-priority").value = n.ntfy_priority || "default";
+
+  $("f-webhook-enabled").checked = !!n.webhook_enabled;
+  $("f-webhook-url").value = n.webhook_url || "";
+  $("f-webhook-format").value = n.webhook_format || "generic";
+  $("f-webhook-method").value = n.webhook_method || "POST";
+}
+
+function collectGeneralForm() {
+  const notifyOn = [];
+  document.querySelectorAll("[data-notify-on]").forEach(cb => {
+    if (cb.checked) notifyOn.push(cb.getAttribute("data-notify-on"));
+  });
+
+  return {
+    general: {
+      listen: $("f-listen").value.trim(),
+      poll_interval: $("f-poll").value.trim(),
+      log_level: $("f-loglevel").value,
+      timezone: $("f-timezone").value.trim(),
+      history_points: Number($("f-history").value) || 720,
+      auth_enabled: $("f-auth-enabled").checked,
+      auth_username: $("f-auth-user").value.trim(),
+      auth_password: $("f-auth-pass").value
+    },
+    notify: {
+      enabled: $("f-notify-enabled").checked,
+      notify_on: notifyOn,
+      ntfy_enabled: $("f-ntfy-enabled").checked,
+      ntfy_url: $("f-ntfy-url").value.trim(),
+      ntfy_topic: $("f-ntfy-topic").value.trim(),
+      ntfy_token: $("f-ntfy-token").value,
+      ntfy_priority: $("f-ntfy-priority").value,
+      webhook_enabled: $("f-webhook-enabled").checked,
+      webhook_url: $("f-webhook-url").value.trim(),
+      webhook_method: $("f-webhook-method").value,
+      webhook_format: $("f-webhook-format").value,
+      webhook_headers: (currentForm.notify && currentForm.notify.webhook_headers) || {}
+    }
+  };
+}
+
+// loadFormTab 加载并渲染配置标签页。
+async function loadFormTab() {
+  try {
+    await fetchForm();
+    pendingClients = null;
+    renderClientForms();
+    renderPolicyForms();
+    renderGeneralForm();
+  } catch (e) {
+    $("client-forms").innerHTML = `<div class="card"><div class="empty">读取配置失败：${esc(e.message)}</div></div>`;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 事件绑定
 // ---------------------------------------------------------------------------
@@ -781,14 +1586,103 @@ document.querySelectorAll(".tab").forEach(tab => {
     activeView = tab.getAttribute("data-view");
     $("view-" + activeView).classList.add("active");
     if (activeView === "evt") refreshEvents();
-    if (activeView === "cfg") loadConfig();
+    if (activeView === "cfg") loadFormTab();
     if (activeView === "dash") tick();
   });
+});
+
+// 配置页内的子标签切换
+document.querySelectorAll(".subtab").forEach(st => {
+  st.addEventListener("click", () => {
+    document.querySelectorAll(".subtab").forEach(x => x.classList.remove("active"));
+    document.querySelectorAll(".subview").forEach(x => x.classList.remove("active"));
+    st.classList.add("active");
+    $("sub-" + st.getAttribute("data-sub")).classList.add("active");
+    // 切到 YAML 页时才读取，避免每次都多打一次请求
+    if (st.getAttribute("data-sub") === "yaml") loadConfig();
+  });
+});
+
+// ---------- 图形化表单的保存按钮 ----------
+
+$("btn-add-client").addEventListener("click", () => {
+  collectClientInputs();
+  if (!currentForm) return;
+  const list = pendingClients || currentForm.clients;
+  list.push(clientTemplate());
+  pendingClients = list;
+  currentForm.clients = list;
+  renderClientForms();
+  toast("已添加一个下载器，填写后记得保存", "ok");
+});
+
+$("btn-add-policy").addEventListener("click", () => {
+  collectPolicyInputs();
+  if (!currentForm) return;
+  currentForm.policies.push(policyTemplate());
+  renderPolicyForms();
+  toast("已添加一条策略，填写后记得保存", "ok");
+});
+
+$("btn-save-clients").addEventListener("click", async () => {
+  const btn = $("btn-save-clients");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 保存中';
+  try {
+    collectClientInputs();
+    const r = await saveForm({ clients: currentForm.clients });
+    toast(r.message || "下载器配置已保存", "ok");
+    pendingClients = null;
+    renderClientForms();
+    await tick();
+  } catch (e) {
+    toast("保存失败: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存下载器配置";
+  }
+});
+
+$("btn-save-policies").addEventListener("click", async () => {
+  const btn = $("btn-save-policies");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 保存中';
+  try {
+    collectPolicyInputs();
+    const r = await saveForm({ policies: currentForm.policies });
+    toast(r.message || "策略配置已保存", "ok");
+    renderPolicyForms();
+    await tick();
+  } catch (e) {
+    toast("保存失败: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存策略配置";
+  }
+});
+
+$("btn-save-general").addEventListener("click", async () => {
+  const btn = $("btn-save-general");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 保存中';
+  try {
+    const patch = collectGeneralForm();
+    const r = await saveForm(patch);
+    toast(r.message || "配置已保存", "ok");
+    renderGeneralForm();
+    await tick();
+  } catch (e) {
+    toast("保存失败: " + e.message, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "保存通用与通知配置";
+  }
 });
 
 $("btn-refresh").addEventListener("click", async () => {
   await tick();
   if (activeView === "evt") await refreshEvents();
+  if (activeView === "cfg") await loadFormTab();
   toast("已刷新", "ok");
 });
 
