@@ -264,3 +264,58 @@ func TestNormalizeURL(t *testing.T) {
 		}
 	}
 }
+
+// TestEnvOverridesYAML 验证环境变量优先于 YAML，且未设置时 YAML 生效。
+//
+// 这条规则很重要：Dockerfile 若把 BTG_LISTEN 固定成环境变量，
+// 用户在 config.yaml 里改 listen 就会被静默忽略。
+// 因此 Dockerfile 刻意不设置这些变量。
+func TestEnvOverridesYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := "listen: \":7000\"\n" +
+		"data_dir: \"/custom\"\n" +
+		"clients:\n" +
+		"  - name: qb\n" +
+		"    type: qbittorrent\n" +
+		"    url: \"http://127.0.0.1:8080\"\n" +
+		"policies:\n" +
+		"  - name: p\n" +
+		"    threshold_total: 1000\n" +
+		"    limit_total: 100\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("未设置环境变量时 YAML 生效", func(t *testing.T) {
+		// 确保相关环境变量干净
+		for _, k := range []string{"BTG_LISTEN", "BTG_DATA_DIR", "BTG_LOG_LEVEL"} {
+			os.Unsetenv(k)
+		}
+		cfg, _, err := Load(path)
+		if err != nil {
+			t.Fatalf("加载失败: %v", err)
+		}
+		if cfg.Listen != ":7000" {
+			t.Errorf("listen = %q, 期望 YAML 中的 \":7000\"", cfg.Listen)
+		}
+		if cfg.DataDir != "/custom" {
+			t.Errorf("data_dir = %q, 期望 YAML 中的 \"/custom\"", cfg.DataDir)
+		}
+	})
+
+	t.Run("设置了环境变量时环境变量优先", func(t *testing.T) {
+		t.Setenv("BTG_LISTEN", ":9999")
+		cfg, _, err := Load(path)
+		if err != nil {
+			t.Fatalf("加载失败: %v", err)
+		}
+		if cfg.Listen != ":9999" {
+			t.Errorf("listen = %q, 期望环境变量的 \":9999\"", cfg.Listen)
+		}
+		// 未被环境变量覆盖的项仍来自 YAML
+		if cfg.DataDir != "/custom" {
+			t.Errorf("data_dir = %q, 期望仍为 YAML 的 \"/custom\"", cfg.DataDir)
+		}
+	})
+}

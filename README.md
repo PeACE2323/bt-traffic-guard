@@ -23,7 +23,7 @@
 | 热重载 | 改配置即时生效，**不会**丢失当前周期进度与限速状态 |
 | Web 面板 | 实时曲线、客户端明细、策略进度、事件日志、在线编辑配置 |
 | 通知 | 支持 ntfy、通用 Webhook、Discord、Slack |
-| 轻量 | 单二进制，约 **8 MB** 静态编译，无运行时依赖，内存占用约 20 MB |
+| 轻量 | 单二进制，约 **7.5 MB** 静态编译，无运行时依赖 |
 | 分族限速 | qBittorrent 4.6+ 支持 IPv4/IPv6 分别限速 |
 
 ---
@@ -65,7 +65,7 @@
 ### 方式二：docker-compose
 
 ```bash
-git clone <本仓库地址> bt-traffic-guard
+git clone https://github.com/PeACE2323/bt-traffic-guard.git
 cd bt-traffic-guard
 docker compose up -d --build
 ```
@@ -73,6 +73,16 @@ docker compose up -d --build
 默认把配置放在 `./config`、数据放在 `./data`，并映射 `8080` 端口。
 
 ### 方式三：docker run
+
+先克隆并构建镜像：
+
+```bash
+git clone https://github.com/PeACE2323/bt-traffic-guard.git
+cd bt-traffic-guard
+docker build -t bt-traffic-guard:1.0.0 .
+```
+
+然后启动容器：
 
 ```bash
 docker run -d \
@@ -89,8 +99,8 @@ docker run -d \
   bt-traffic-guard:1.0.0
 ```
 
-> 本地构建镜像：`docker build -t bt-traffic-guard:1.0.0 .`
-> 国内网络构建慢的话，加上 `--build-arg GOPROXY=https://goproxy.cn,direct`。
+> 国内网络构建慢的话，把构建命令换成：
+> `docker build --build-arg GOPROXY=https://goproxy.cn,direct -t bt-traffic-guard:1.0.0 .`
 
 ---
 

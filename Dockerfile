@@ -42,11 +42,14 @@ RUN apk add --no-cache ca-certificates tzdata wget \
 
 COPY --from=builder /out/bt-traffic-guard /usr/local/bin/bt-traffic-guard
 
-# 默认时区，可通过 TZ 环境变量覆盖
+# 默认时区，可通过 TZ 环境变量覆盖。
+#
+# 注意：这里刻意不设置 BTG_LISTEN / BTG_DATA_DIR。
+# 环境变量的优先级高于 config.yaml，若在此固化这两个值，
+# 用户在 config.yaml 里修改 listen / data_dir 就会被静默忽略。
+# 二进制的内置默认值同样是 :8080 与 /data，无需重复声明。
 ENV TZ=Asia/Shanghai \
-    BTG_CONFIG=/config/config.yaml \
-    BTG_DATA_DIR=/data \
-    BTG_LISTEN=:8080
+    BTG_CONFIG=/config/config.yaml
 
 # 配置目录与数据目录，建议都做持久化挂载
 VOLUME ["/config", "/data"]
