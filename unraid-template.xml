@@ -11,19 +11,26 @@
 -->
 <Container version="2">
   <Name>bt-traffic-guard</Name>
-  <Repository>bt-traffic-guard:1.0.0</Repository>
-  <Registry/>
+  <!-- GHCR 的镜像路径必须全小写 -->
+  <Repository>ghcr.io/peace2323/bt-traffic-guard:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
-  <Support/>
-  <Project/>
+  <Support>https://github.com/PeACE2323/bt-traffic-guard/issues</Support>
+  <Project>https://github.com/PeACE2323/bt-traffic-guard</Project>
   <Overview>
     BT 上传流量监控与自动限速。
     持续采集 qBittorrent / Transmission 的上传速度与累计流量（区分 IPv4 / IPv6），
     当在自定义周期（如每天/每周/每月）内上传总量达到阈值时，自动下发上传限速；
     周期结束后自动解除。自带 Web 面板，可实时查看曲线、手动解除限速、在线改配置。
+
+    【重要】所有配置都可以在网页上完成，不需要在这里预先填写连接信息。
+    启动后打开 Web 面板 →「配置」标签页 → 填写下载器地址与凭据即可。
+
+    支持 qBittorrent 5.2.0+ 的 API Key 认证（推荐，不会触发 IP 封禁），
+    也兼容旧版本的用户名密码登录。
   </Overview>
   <Category>Network:Web Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:8080]</WebUI>
@@ -56,34 +63,51 @@
           Description="debug / info / warn / error。排查问题时用 debug。"
           Type="Variable" Display="advanced" Required="false" Mask="false">info</Config>
 
-  <Config Name="qBittorrent 地址" Target="BTG_QBITTORRENT_URL" Default="" Mode=""
-          Description="可选。填写后覆盖 config.yaml 中的地址。例如 http://192.168.1.10:8080。
-若 qBittorrent 与 Unraid 在同一台机器上，且容器使用 bridge 网络，
-请填 Unraid 的局域网 IP（不要用 127.0.0.1）。"
-          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <!-- =======================================================================
+       以下连接信息【全部留空即可】。
+       启动后在 Web 面板的「配置」标签页填写更直观，改完立即生效、不用重启容器。
 
-  <Config Name="qBittorrent 用户名" Target="BTG_QBITTORRENT_USERNAME" Default="admin" Mode=""
-          Description="qBittorrent WebUI 的用户名。"
-          Type="Variable" Display="always" Required="false" Mask="false">admin</Config>
+       只有在你希望「用环境变量强制覆盖配置文件」时才需要填。
+       注意：环境变量优先级高于 config.yaml，
+       填了之后在网页上修改对应项不会生效。
+       ======================================================================= -->
 
-  <Config Name="qBittorrent 密码" Target="BTG_QBITTORRENT_PASSWORD" Default="" Mode=""
-          Description="qBittorrent WebUI 的密码。"
-          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="【可选】qBittorrent 地址" Target="BTG_QBITTORRENT_URL" Default="" Mode=""
+          Description="留空即可，启动后在 Web 面板里填写。
+若要用环境变量覆盖，填例如 http://192.168.1.10:8080。
+容器使用 bridge 网络时不能填 127.0.0.1（那指向容器自身），请填 Unraid 的局域网 IP。"
+          Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
-  <Config Name="Transmission 地址" Target="BTG_TRANSMISSION_URL" Default="" Mode=""
-          Description="可选。例如 http://192.168.1.10:9091。填 IP 即可，程序会自动补 /transmission/rpc。"
-          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="【可选】qBittorrent API Key" Target="BTG_QBITTORRENT_API_KEY" Default="" Mode=""
+          Description="留空即可，启动后在 Web 面板里填写。
+qBittorrent 5.2.0 及以上版本推荐用这个：在「设置 → WebUI → API Key」点击生成，
+复制 qbt_ 开头的字符串填进来。这是无状态认证，不会触发登录失败导致的 IP 封禁。
+填了它之后下面的用户名密码会被忽略。"
+          Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 
-  <Config Name="Transmission 用户名" Target="BTG_TRANSMISSION_USERNAME" Default="" Mode=""
-          Description="若 Transmission 开启了 RPC 认证则填写，否则留空。"
-          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="【可选】qBittorrent 用户名" Target="BTG_QBITTORRENT_USERNAME" Default="" Mode=""
+          Description="留空即可。适用于没有 API Key 的旧版本（5.2.0 以下）。"
+          Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
-  <Config Name="Transmission 密码" Target="BTG_TRANSMISSION_PASSWORD" Default="" Mode=""
-          Description="若 Transmission 开启了 RPC 认证则填写，否则留空。"
-          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="【可选】qBittorrent 密码" Target="BTG_QBITTORRENT_PASSWORD" Default="" Mode=""
+          Description="留空即可。适用于没有 API Key 的旧版本（5.2.0 以下）。"
+          Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 
-  <Config Name="面板访问密码" Target="BTG_WEB_PASSWORD" Default="" Mode=""
-          Description="可选。设置后自动开启 Web 面板的基本认证，用户名默认 admin（可用 BTG_WEB_USERNAME 修改）。
-强烈建议在局域网以外的环境设置此项。"
-          Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="【可选】Transmission 地址" Target="BTG_TRANSMISSION_URL" Default="" Mode=""
+          Description="留空即可。填根地址即可，程序会自动补 /transmission/rpc。
+注意 Transmission 不支持 API Key，只能用用户名密码。"
+          Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="【可选】Transmission 用户名" Target="BTG_TRANSMISSION_USERNAME" Default="" Mode=""
+          Description="留空即可。若 Transmission 开启了 RPC 认证则填写。"
+          Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="【可选】Transmission 密码" Target="BTG_TRANSMISSION_PASSWORD" Default="" Mode=""
+          Description="留空即可。若 Transmission 开启了 RPC 认证则填写。"
+          Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+
+  <Config Name="【可选】面板访问密码" Target="BTG_WEB_PASSWORD" Default="" Mode=""
+          Description="留空则不开认证，也可以在 Web 面板的「配置 → 通用与通知」里开启。
+强烈建议在可被外网访问的环境下设置此项。"
+          Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 </Container>
