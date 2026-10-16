@@ -64,6 +64,9 @@ func (t *Transmission) Name() string { return t.name }
 // Type 返回客户端类型。
 func (t *Transmission) Type() string { return "transmission" }
 
+// URL 返回配置中的 RPC 地址，用于界面展示。
+func (t *Transmission) URL() string { return t.doer.base }
+
 // rpcPath 返回 RPC 端点路径。
 func (t *Transmission) rpcPath() string {
 	base := t.doer.base
