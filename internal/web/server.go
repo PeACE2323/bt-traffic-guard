@@ -277,7 +277,10 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) error {
 		return apiError{Code: 500, Message: "配置未初始化"}
 	}
 	if r.Method == http.MethodGet {
-		return writeJSON(w, sanitizeConfig(cfg, false))
+		// 必须擦除敏感字段后再返回：
+		// 面板认证默认关闭，直接回传原始配置会把下载器密码、
+		// API Key、ntfy 令牌与面板密码全部暴露给任何能访问端口的人。
+		return writeJSON(w, sanitizeConfig(cfg, true))
 	}
 	return apiError{Code: http.StatusMethodNotAllowed, Message: "请使用 GET 读取配置"}
 }

@@ -35,14 +35,73 @@ func parseYAML(text string) (*config.Config, error) {
 	return cfg, nil
 }
 
-// sanitizeConfig 在返回给前端前擦除敏感字段。
+// sanitizeConfig 返回一份【已擦除敏感字段】的配置副本，用于经由 HTTP 暴露给前端。
 //
-// 目前策略是：保留结构，但把密码字段替换为占位符，
-// 前端保存时会把这些占位符原样回传，服务端在合并时保留原值。
+// 为什么必须擦除：面板的访问认证默认是关闭的。
+// 若直接回传原始配置，任何能访问该端口的人都能读到
+// 下载器密码、qBittorrent API Key、ntfy 令牌与面板密码本身。
+//
+// 擦除方式是用固定的占位符替换（而不是清空），
+// 这样前端能知道「该字段已配置」，用户不改动时服务端会沿用原值。
+//
+// 注意：返回的是深拷贝，绝不修改传入的 cfg，
+// 否则会把运行中的配置真的改掉。
 func sanitizeConfig(cfg *config.Config, mask bool) *config.Config {
+	if cfg == nil {
+		return nil
+	}
 	if !mask {
+		// 仅在服务端内部使用（不经过 HTTP）时才允许拿原始配置。
+		// 任何面向 HTTP 的调用都必须传 mask=true。
 		return cfg
 	}
+
 	out := *cfg
+
+	// 客户端：擦除密码与 API Key
+	out.Clients = make([]config.ClientConfig, len(cfg.Clients))
+	copy(out.Clients, cfg.Clients)
+	for i := range out.Clients {
+		out.Clients[i].Password = maskSecret(cfg.Clients[i].Password)
+		out.Clients[i].APIKey = maskSecret(cfg.Clients[i].APIKey)
+	}
+
+	// 面板认证密码
+	out.WebAuth = cfg.WebAuth
+	out.WebAuth.Password = maskSecret(cfg.WebAuth.Password)
+
+	// 通知：ntfy 令牌与 Webhook 自定义头（后者常带 Authorization）
+	out.Notify = cfg.Notify
+	out.Notify.Ntfy.Token = maskSecret(cfg.Notify.Ntfy.Token)
+	if len(cfg.Notify.Webhook.Headers) > 0 {
+		headers := make(map[string]string, len(cfg.Notify.Webhook.Headers))
+		for k, v := range cfg.Notify.Webhook.Headers {
+			if isSensitiveHeader(k) {
+				headers[k] = maskSecret(v)
+			} else {
+				headers[k] = v
+			}
+		}
+		out.Notify.Webhook.Headers = headers
+	}
+
 	return &out
+}
+
+// maskSecret 把非空秘密替换为占位符；空值保持为空。
+func maskSecret(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return ""
+	}
+	return passwordMask
+}
+
+// isSensitiveHeader 判断某个自定义请求头是否可能携带凭据。
+func isSensitiveHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "authorization", "x-api-key", "api-key", "x-auth-token",
+		"cookie", "proxy-authorization", "x-token":
+		return true
+	}
+	return false
 }
