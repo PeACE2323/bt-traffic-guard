@@ -1,4 +1,4 @@
-// Package config 负责加载、校验并热更新 BT Traffic Guard 的配置文件。
+// Package config 负责加载、校验并热更新 Traffic Guard 的配置文件。
 //
 // 配置来源优先级（从低到高）：
 //  1. 内置默认值
@@ -756,7 +756,7 @@ func Save(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("序列化配置失败: %w", err)
 	}
-	header := "# BT Traffic Guard 配置文件\n" +
+	header := "# Traffic Guard 配置文件\n" +
 		"# 修改后可在 Web UI 点击「重载配置」，或等待自动热重载（每 3 秒检查一次）。\n" +
 		"# 上传限速单位：字节/秒，0 表示不限速。阈值单位：字节。\n\n"
 	tmp := path + ".tmp"

@@ -87,9 +87,9 @@ func (s *Sender) title(ev policy.Event) string {
 	case policy.EventResume:
 		return "✅ BT 上传限速已解除"
 	case policy.EventError:
-		return "⚠️ BT Traffic Guard 执行失败"
+		return "⚠️ Traffic Guard 执行失败"
 	default:
-		return "BT Traffic Guard 通知"
+		return "Traffic Guard 通知"
 	}
 }
 

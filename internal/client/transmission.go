@@ -46,6 +46,17 @@ type Transmission struct {
 	tracker limitTracker
 	// hasFamilyPreference 记录用户是否显式要求分族限速。
 	prefersFamily bool
+
+	// famMtx 保护「上一次有效的地址族比例」缓存。
+	//
+	// 动机：Transmission 只返回当前已连接 peer 的明细，
+	// PT 保种时上传多为空闲、peers 为空，
+	// 若此时直接判为「无法归类」，用户会看到流量长期停留在「未分类」。
+	// 因此缓存最近一次有效比例，空闲时继续沿用。
+	famMtx    sync.Mutex
+	lastV4    int64
+	lastV6    int64
+	lastFamAt time.Time
 }
 
 // NewTransmission 构造 Transmission 客户端。
@@ -302,6 +313,20 @@ func (t *Transmission) Fetch(ctx context.Context) (Stats, error) {
 	v4, v6, peers := t.splitByFamily(ctx)
 	st.PeerCount = peers
 
+	// 这一轮没有可用的 peer 明细（保种空闲）时，
+	// 沿用最近一次的有效比例，避免流量被反复记成「未分类」。
+	t.famMtx.Lock()
+	if v4+v6 > 0 {
+		t.lastV4, t.lastV6 = v4, v6
+		t.lastFamAt = time.Now()
+	} else if t.lastV4+t.lastV6 > 0 {
+		// 只在缓存仍然较新时沿用，太久以前的分布没有参考价值。
+		if time.Since(t.lastFamAt) < 30*time.Minute {
+			v4, v6 = t.lastV4, t.lastV6
+		}
+	}
+	t.famMtx.Unlock()
+
 	totalSpeed := stats.UploadSpeed
 	totalData := stats.CumulativeStats.UploadedBytes
 
@@ -343,6 +368,11 @@ func (t *Transmission) Fetch(ctx context.Context) (Stats, error) {
 
 // splitByFamily 统计连接中的 peer 地址族数量。
 // 返回 (ipv4 peer 数, ipv6 peer 数, 总 peer 数)。
+//
+// 说明：Transmission 只返回【当前已连接】的 peer 明细。
+// PT 保种时上传大多是空闲的，此刻 peers 常常为空，
+// 于是地址族比例无从判断。
+// 为避免「一空闲就退回未分类」，调用方会缓存上一次有效的比例继续沿用（见 Fetch）。
 func (t *Transmission) splitByFamily(ctx context.Context) (int64, int64, int) {
 	args := map[string]any{
 		"fields": []string{"id", "peers", "peersFrom", "rateUpload", "uploadedEver"},
@@ -355,8 +385,6 @@ func (t *Transmission) splitByFamily(ctx context.Context) (int64, int64, int) {
 	var v4, v6 int64
 	total := 0
 	for _, tr := range res.Torrents {
-		// 先看 peersFrom 的汇总（来自 tracker/DHT/PEX 的数量），
-		// 再叠加 peers 明细中的实际地址。
 		for _, p := range tr.Peers {
 			total++
 			switch classifyIP(p.Address) {

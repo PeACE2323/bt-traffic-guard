@@ -125,7 +125,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if cfg != nil && cfg.WebAuth.Enabled {
 		user, pass, ok := r.BasicAuth()
 		if !ok || user != cfg.WebAuth.Username || pass != cfg.WebAuth.Password {
-			w.Header().Set("WWW-Authenticate", `Basic realm="BT Traffic Guard"`)
+			w.Header().Set("WWW-Authenticate", `Basic realm="Traffic Guard"`)
 			http.Error(w, "需要认证", http.StatusUnauthorized)
 			return
 		}

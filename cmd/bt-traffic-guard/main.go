@@ -225,7 +225,7 @@ func (a *App) applyConfig(cfg *config.Config, first bool) {
 	}
 	a.engine.Load(cfg.Policies)
 	if first {
-		a.logf("info", "BT Traffic Guard %s 启动，监听 %s，采样间隔 %s", version, cfg.Listen, cfg.PollInterval)
+		a.logf("info", "Traffic Guard %s 启动，监听 %s，采样间隔 %s", version, cfg.Listen, cfg.PollInterval)
 	}
 }
 

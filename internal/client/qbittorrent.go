@@ -458,24 +458,50 @@ func (q *QBittorrent) splitByFamily(mdOK bool, md *mainData, totalSpeed, totalDa
 		return v4, v6, familySplit{speed: totalSpeed, total: totalData}
 	}
 
+	// 同时统计两件事：
+	//   sumV4/sumV6  —— 各族的【瞬时上传速率】
+	//   cntV4/cntV6  —— 各族的【peer 连接数】
+	//
+	// 为什么要统计连接数：PT 保种时大部分时间是空闲的，
+	// 所有 peer 的 up_speed 都是 0。若只按速率归因，
+	// 这些 peer 会被全部跳过，结果永远退回「全部未分类」——
+	// 用户看到的就是「分不出 IPv4/IPv6」。
+	// 因此在速率为 0 时改用【连接数占比】来分摊。
 	var sumV4, sumV6 int64
+	var cntV4, cntV6 int64
 	for _, peerSet := range md.Peers {
 		for ip, p := range peerSet {
 			addr := p.IP
 			if addr == "" {
 				addr = ip
 			}
-			sp := p.UpSpeed
-			if sp <= 0 {
-				continue
-			}
 			switch classifyIP(addr) {
 			case FamilyIPv4:
-				sumV4 += sp
+				cntV4++
+				if p.UpSpeed > 0 {
+					sumV4 += p.UpSpeed
+				}
 			case FamilyIPv6:
-				sumV6 += sp
+				cntV6++
+				if p.UpSpeed > 0 {
+					sumV6 += p.UpSpeed
+				}
 			}
 		}
+	}
+
+	// 真实速率合计为零（空闲保种）时，按 peer 连接数分摊总量，
+	// 这样至少能给出「这个下载器当前主要走 v4 还是 v6」的正确归属。
+	if sumV4+sumV6 <= 0 {
+		if cntV4+cntV6 <= 0 {
+			return v4, v6, familySplit{speed: totalSpeed, total: totalData}
+		}
+		cnt := cntV4 + cntV6
+		v4.speed = totalSpeed * cntV4 / cnt
+		v6.speed = totalSpeed - v4.speed
+		v4.total = totalData * cntV4 / cnt
+		v6.total = totalData - v4.total
+		return v4, v6, familySplit{}
 	}
 
 	total := sumV4 + sumV6
