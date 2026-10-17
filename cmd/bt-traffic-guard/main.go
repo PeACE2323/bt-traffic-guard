@@ -209,6 +209,12 @@ func (a *App) applyConfig(cfg *config.Config, first bool) {
 	if prevMonitor != nil && !first {
 		a.monitor.AdoptStateFrom(prevMonitor)
 	}
+	// 让周期累计能跨容器重启延续 —— 升级镜像后不再从 0 重新计数。
+	// 状态文件放在数据目录里，随挂载卷一起持久化。
+	if cfg.DataDir != "" {
+		statePath := filepath.Join(cfg.DataDir, "traffic-state.json")
+		a.monitor.SetStatePath(statePath, windowKeyFor(cfg))
+	}
 
 	// --- 通知 ---
 	host, _ := os.Hostname()
@@ -400,6 +406,9 @@ func runMonitorLoop(ctx context.Context, get func() *traffic.Monitor) {
 		}
 
 		mon.PollOnce(ctx, time.Now())
+		// 采样后落盘周期基线（内部有节流），
+		// 使容器重启后周期累计能接着算而不是从 0 开始。
+		mon.PersistAfterPoll()
 
 		// 以 interval 为节奏采样，但期间持续检查监控器是否已被替换，
 		// 一旦替换立即跳出，避免继续用旧 registry 采样。
@@ -574,4 +583,29 @@ func normalizeListen(addr string) string {
 		return addr[i:]
 	}
 	return ":" + addr
+}
+
+// windowKeyFor 生成当前周期的标识，用于判断持久化的基线是否仍然有效。
+//
+// 采用「对齐方式 + 当前周期的起始时刻」作为键：
+//   - 同一周期内重启，键不变  -> 恢复基线，周期累计延续
+//   - 跨周期后重启，键改变    -> 丢弃旧基线，从头计数
+//
+// 多条策略若对齐方式不同，取第一条启用策略作为代表 ——
+// 对于绝大多数「单一每日/每月策略」的用法已经足够，
+// 且比不做持久化要准确得多。
+func windowKeyFor(cfg *config.Config) string {
+	loc := cfg.Location()
+	now := time.Now().In(loc)
+
+	for _, p := range cfg.Policies {
+		if !p.IsEnabled() {
+			continue
+		}
+		start, _ := config.WindowBounds(p.Align, p.Window.Std(), now, time.Time{}, loc)
+		return p.Align + ":" + start.Format("2006-01-02T15:04")
+	}
+	// 没有启用的策略：用自然日作为默认周期。
+	start, _ := config.WindowBounds("day", 24*time.Hour, now, time.Time{}, loc)
+	return "day:" + start.Format("2006-01-02T15:04")
 }

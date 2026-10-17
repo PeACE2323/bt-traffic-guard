@@ -121,6 +121,15 @@ type Monitor struct {
 	lastPollEnd time.Time
 	pollCount   int64
 	pollErrors  int64
+
+	// persist 负责把「周期基线」落盘，使容器重启后周期累计能延续。
+	// 为 nil 时不做持久化（测试，以及不关心重启续算的场景）。
+	persist *persister
+	// windowKey 标识当前周期，跨周期后旧基线自动失效。
+	windowKey string
+	// pendingAccum 暂存从磁盘恢复的「本周期已累计字节数」。
+	// 启动时 counters 尚未建立，必须等首轮采样创建计数器后再套用。
+	pendingAccum map[string]map[client.Family]int64
 }
 
 // NewMonitor 创建监控器。
@@ -155,6 +164,10 @@ func (m *Monitor) ensureCounters(name string) map[client.Family]*counter {
 			fams[f] = &counter{}
 		}
 		m.counters[name] = fams
+		// 若这个客户端有从磁盘恢复的周期基线，就在这里套用。
+		// 必须等到计数器创建之后 —— 启动阶段 counters 还是空的，
+		// 那时直接写入会被静默丢弃，导致重启后周期累计从 0 重新开始。
+		m.applyPendingBaselineLocked(name, fams)
 	}
 	return fams
 }
@@ -553,6 +566,7 @@ func (m *Monitor) Stats() map[string]any {
 func (m *Monitor) Run(ctx context.Context) {
 	// 立即采样一次以建立基线。
 	m.PollOnce(ctx, time.Now())
+	m.PersistAfterPoll()
 
 	ticker := time.NewTicker(m.interval)
 	defer ticker.Stop()
@@ -562,8 +576,25 @@ func (m *Monitor) Run(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			m.PollOnce(ctx, now)
+			// 在锁外写盘；内部带节流，不会每轮都真的落盘。
+			m.PersistAfterPoll()
 		}
 	}
+}
+
+// PersistAfterPoll 在采样结束后记录周期基线。
+//
+// 在锁外调用，避免持有监控器锁做磁盘 IO。
+// 内部由 persister 做 30 秒节流，因此每轮调用开销很小。
+func (m *Monitor) PersistAfterPoll() {
+	m.mu.RLock()
+	p := m.persist
+	key := m.windowKey
+	m.mu.RUnlock()
+	if p == nil {
+		return
+	}
+	m.snapshotForPersist(key)
 }
 
 // ---------------------------------------------------------------------------

@@ -580,6 +580,13 @@ func (e *Engine) rollWindow(ctx context.Context, rt *runtime, now, startedAt tim
 	}
 	e.monitor.ResetWindow(names)
 
+	// 周期已切换，立即把新基线落盘（忽略节流）。
+	// 否则容器在「周期开始后、首次定期写盘之前」重启，
+	// 会丢掉这段已经产生的流量。
+	newKey := align + ":" + newStart.Format("2006-01-02T15:04")
+	e.monitor.SetWindowKey(newKey)
+	e.monitor.ForcePersist(newKey)
+
 	e.logf("info", "策略 %q 进入新周期（%s → %s），已重置 %d 个客户端的累计流量: %v",
 		rt.cfg.Name,
 		oldEnd.In(loc).Format("01-02 15:04:05"),

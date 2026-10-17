@@ -329,6 +329,102 @@ type transferInfo struct {
 	GlobalRatio      any    `json:"global_ratio"`
 }
 
+// torrentPeerFamilies 通过 /api/v2/torrents/peers 统计各地址族的连接数。
+//
+// 为什么需要这个额外的请求：
+// sync/maindata 的 peers 字段并不可靠 —— 它只包含「最近有活动」
+// 且仍驻留内存的种子的 peer 明细，大量保种但空闲时该字段常常缺失。
+// 一旦缺失，调用方就会把全部流量判为「未分类」，
+// 用户看到的现象就是「永远分不出 IPv4/IPv6」。
+//
+// torrents/peers 是 qBittorrent 专门用于查询某种子 peer 列表的接口，
+// 数据完整、稳定，代价是需要按种子逐个查询。
+// 为控制开销，只取上传速率最高的若干个种子（活跃种子才有上传流量）。
+//
+// 返回 (v4 连接数, v6 连接数)。任一环节失败都返回 0,0，由调用方决定降级策略。
+func (q *QBittorrent) torrentPeerFamilies(ctx context.Context, mdOK bool, md *mainData) (int64, int64) {
+	// 先确定要查哪些种子：优先用 maindata 里的种子列表按上传速率排序。
+	var hashes []string
+	if mdOK {
+		type tstruct struct {
+			hash string
+			up   int64
+		}
+		var list []tstruct
+		for h, t := range md.Torrents {
+			list = append(list, tstruct{hash: h, up: t.UpSpeed})
+		}
+		// 简单的选择排序：只关心前 N 个，规模很小
+		const maxTorrents = 25
+		for i := 0; i < len(list) && i < maxTorrents; i++ {
+			best := i
+			for j := i + 1; j < len(list); j++ {
+				if list[j].up > list[best].up {
+					best = j
+				}
+			}
+			list[i], list[best] = list[best], list[i]
+			if list[i].up > 0 {
+				hashes = append(hashes, list[i].hash)
+			}
+		}
+		// 若全部空闲（up 都是 0），仍然挑前若干个查询 ——
+		// 空闲时也需要知道 peer 的地址族构成。
+		if len(hashes) == 0 {
+			for i := 0; i < len(list) && i < maxTorrents; i++ {
+				hashes = append(hashes, list[i].hash)
+			}
+		}
+	}
+
+	// maindata 不可用时，退化为查询全部种子（限量）。
+	if len(hashes) == 0 {
+		data, err := q.apiGet(ctx, "/api/v2/torrents/info")
+		if err != nil {
+			return 0, 0
+		}
+		var infos []struct {
+			Hash string `json:"hash"`
+		}
+		if err := json.Unmarshal(data, &infos); err != nil {
+			return 0, 0
+		}
+		for i, t := range infos {
+			if i >= 25 {
+				break
+			}
+			hashes = append(hashes, t.Hash)
+		}
+	}
+
+	var v4, v6 int64
+	for _, h := range hashes {
+		data, err := q.apiGet(ctx, "/api/v2/torrents/peers?hash="+url.QueryEscape(h))
+		if err != nil {
+			continue
+		}
+		var peers map[string]struct {
+			IP string `json:"ip"`
+		}
+		if err := json.Unmarshal(data, &peers); err != nil {
+			continue
+		}
+		for k, p := range peers {
+			addr := p.IP
+			if addr == "" {
+				addr = k
+			}
+			switch classifyIP(addr) {
+			case FamilyIPv4:
+				v4++
+			case FamilyIPv6:
+				v6++
+			}
+		}
+	}
+	return v4, v6
+}
+
 // mainData 是 /api/v2/sync/maindata 的响应子集。
 type mainData struct {
 	ServerState struct {
@@ -417,6 +513,24 @@ func (q *QBittorrent) Fetch(ctx context.Context) (Stats, error) {
 
 	// 按地址族拆分。
 	v4, v6, unknown := q.splitByFamily(mdOK, &md, upSpeed, upData)
+
+	// 若 maindata 没给出可用的 peer 明细（大量保种空闲时很常见），
+	// 改用 torrents/peers 逐种子查询 —— 这是唯一可靠的分族来源。
+	//
+	// 没有这一步时，用户会看到「流量永远是未分类」：
+	// sync/maindata 的 peers 字段只覆盖最近活跃的种子，
+	// 保种场景下经常为空，于是全部流量被归为 unknown。
+	if v4.speed == 0 && v6.speed == 0 && upSpeed > 0 {
+		if c4, c6 := q.torrentPeerFamilies(ctx, mdOK, &md); c4+c6 > 0 {
+			sum := c4 + c6
+			v4.speed = upSpeed * c4 / sum
+			v6.speed = upSpeed - v4.speed
+			v4.total = upData * c4 / sum
+			v6.total = upData - v4.total
+			unknown = familySplit{}
+		}
+	}
+
 	st.UpSpeed[FamilyIPv4] = v4.speed
 	st.UpTotal[FamilyIPv4] = v4.total
 	st.UpSpeed[FamilyIPv6] = v6.speed
