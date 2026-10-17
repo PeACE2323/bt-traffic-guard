@@ -124,8 +124,10 @@
   .bar>i.v4{background:var(--v4)} .bar>i.v6{background:var(--v6)}
   .bar>i.warn{background:var(--warn)} .bar>i.err{background:var(--err)}
   canvas{width:100%; display:block}
-  .legend{display:flex; gap:16px; font-size:12px; color:var(--muted); margin-top:8px; flex-wrap:wrap}
+  .legend{display:flex; gap:16px; font-size:12px; color:var(--muted); margin-top:8px; flex-wrap:wrap; align-items:center}
   .legend span{display:flex; align-items:center; gap:6px}
+  /* 图例右侧的补充说明（峰值 / 当前值），与图例项区分开 */
+  .legend-note{margin-left:auto; font-variant-numeric:tabular-nums; color:var(--fg); opacity:.85}
   /* 标签栏（总览 / 策略 / 事件日志 / 配置）也固定在顶部，
      紧贴在 header 下方。这样滚动页面时「总览」等标题不会被内容盖住。 */
   .tabs{
@@ -291,6 +293,7 @@
         <canvas id="chart-speed" height="170"></canvas>
         <div class="legend">
           <span><i class="dot v4"></i>上传速度</span>
+          <span class="legend-note" id="chart-speed-peak"></span>
         </div>
       </div>
       <div class="card">
@@ -298,6 +301,7 @@
         <canvas id="chart-cum" height="170"></canvas>
         <div class="legend">
           <span><i class="dot v4" style="background:var(--warn)"></i>本周期累计上传</span>
+          <span class="legend-note" id="chart-cum-peak"></span>
         </div>
       </div>
     </div>
@@ -677,7 +681,10 @@ function drawAreaChart(canvas, series, opts) {
   ctx.fillStyle = tc.muted;
   ctx.font = "11px -apple-system,Segoe UI,sans-serif";
   ctx.textAlign = "left";
-  ctx.fillText(fmtSpeedPlain(max), padL + 4, padT + 10);
+  // opts.fmt 决定如何格式化 Y 轴刻度，默认按速度。
+  // 累计量图表必须传 fmtBytes，否则会出现「988 MiB/s」这种错误单位。
+  const yFmt = opts.fmt || fmtSpeedPlain;
+  ctx.fillText(yFmt(max), padL + 4, padT + 10);
   ctx.textAlign = "right";
   if (opts.yLabel) ctx.fillText(opts.yLabel, padL + w - 2, padT + 10);
 
@@ -1008,15 +1015,20 @@ function renderCharts(samples) {
     { color: tc.v4, data: samples.map(s => s.up || 0) },
   ];
 
-  drawAreaChart($("chart-speed"), speedSeries, {
-    yLabel: samples.length ? fmtSpeedPlain(Math.max(...samples.map(s => {
-      return s.up || 0;
-    }))) + " 峰值" : ""
-  });
+  // 峰值直接写在图例里，不再用右侧 yLabel ——
+  // 那里原本同时显示「Y 轴上限×1.15」和「峰值」，两个相近数字并排极易混淆。
+  const peak = samples.length ? Math.max(...samples.map(s => s.up || 0)) : 0;
+  $("chart-speed-peak").textContent = peak > 0 ? "峰值 " + fmtBytes(peak) + "/s" : "";
+
+  drawAreaChart($("chart-speed"), speedSeries, {});
+
+  // 累计量图表：Y 轴必须按字节格式化，不能沿用速度格式。
+  const cumMax = samples.length ? Math.max(...samples.map(s => s.win || 0)) : 0;
+  $("chart-cum-peak").textContent = cumMax > 0 ? "当前 " + fmtBytes(cumMax) : "";
 
   drawAreaChart($("chart-cum"), [
     { color: tc.warn, data: samples.map(s => s.win || 0), width: 2 }
-  ], {});
+  ], { fmt: fmtBytes });
 }
 
 async function tick() {

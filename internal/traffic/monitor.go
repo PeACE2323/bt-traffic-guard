@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -340,21 +341,33 @@ func (m *Monitor) History(name string) []Sample {
 	if name != "" && name != "__all__" {
 		return append([]Sample(nil), m.history[name]...)
 	}
-	// 聚合：把各客户端按时间戳对齐求和。
+	// 聚合：把各客户端的样本按轮次对齐后求和。
+	//
+	// 时间戳说明：PollOnce 对所有客户端使用同一个 now，
+	// 所以同一轮内各客户端的 Timestamp 是【完全相同】的。
+	// 因此按时间戳精确分组即可，不需要也不应该设置容差 ——
+	// 一旦容差大于采样间隔，相邻两轮就会被误合并，
+	// 导致曲线上的累计量被重复累加（实测可达真实值的 2~3 倍），
+	// 与顶部卡片显示的数字对不上。
+	//
+	// 若将来 PollOnce 改为每客户端独立时间戳，应改为按「轮次序号」对齐，
+	// 而不是放宽时间容差。
 	type acc struct {
-		up   int64
-		dl   int64
-		win  int64
-		seen bool
+		ts  time.Time
+		up  int64
+		dl  int64
+		win int64
 	}
+
+	// 用时间戳的纳秒值精确分组。
 	merged := map[int64]*acc{}
-	order := []int64{}
+	var order []int64
 	for _, h := range m.history {
 		for _, s := range h {
-			key := s.Timestamp.Unix()
+			key := s.Timestamp.UnixNano()
 			a, ok := merged[key]
 			if !ok {
-				a = &acc{}
+				a = &acc{ts: s.Timestamp}
 				merged[key] = a
 				order = append(order, key)
 			}
@@ -363,20 +376,20 @@ func (m *Monitor) History(name string) []Sample {
 			a.win += s.WindowBytes
 		}
 	}
-	// 按时间排序
-	for i := 1; i < len(order); i++ {
-		for j := i; j > 0 && order[j] < order[j-1]; j-- {
-			order[j], order[j-1] = order[j-1], order[j]
-		}
-	}
-	out := make([]Sample, 0, len(order))
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+
+	groups := make([]*acc, 0, len(order))
 	for _, k := range order {
-		a := merged[k]
+		groups = append(groups, merged[k])
+	}
+
+	out := make([]Sample, 0, len(groups))
+	for _, g := range groups {
 		out = append(out, Sample{
-			Timestamp:   time.Unix(k, 0),
-			UpSpeed:     a.up,
-			DlSpeed:     a.dl,
-			WindowBytes: a.win,
+			Timestamp:   g.ts,
+			UpSpeed:     g.up,
+			DlSpeed:     g.dl,
+			WindowBytes: g.win,
 		})
 	}
 	return out
@@ -439,6 +452,15 @@ func (m *Monitor) ResetWindow(names []string) {
 			snap.WindowBytes = 0
 			m.snapshots[name] = snap
 		}
+		// 同时清掉该客户端的曲线历史。
+		//
+		// 否则上一个周期的大值会残留在曲线里，
+		// 让「周期累计流量」图出现远高于当前值的峰值
+		// （用户实测：当前 859 MiB，曲线峰值却有 988 MiB），
+		// 看起来像是两个不一致的数字。
+		//
+		// 累计量曲线表达的是「本周期内的增长」，新周期就该从 0 画起。
+		m.history[name] = nil
 	}
 
 	if len(names) == 0 {
