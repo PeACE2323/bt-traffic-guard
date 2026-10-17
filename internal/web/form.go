@@ -71,8 +71,6 @@ type clientView struct {
 	Enabled            bool   `json:"enabled"`
 	InsecureSkipVerify bool   `json:"insecure_skip_verify"`
 	Timeout            string `json:"timeout"`
-	UploadLimitIPv4    int64  `json:"upload_limit_ipv4"`
-	UploadLimitIPv6    int64  `json:"upload_limit_ipv6"`
 
 	// 以下为只读的派生信息，供界面展示
 	AuthMode     string `json:"auth_mode"`
@@ -98,18 +96,12 @@ type policyView struct {
 	Align  string `json:"align"`
 
 	ThresholdTotal string `json:"threshold_total"`
-	ThresholdIPv4  string `json:"threshold_ipv4"`
-	ThresholdIPv6  string `json:"threshold_ipv6"`
 
 	LimitTotal string `json:"limit_total"`
-	LimitIPv4  string `json:"limit_ipv4"`
-	LimitIPv6  string `json:"limit_ipv6"`
 
 	// 解除限速后要下发的速度。
 	// 空字符串表示「未启用」—— 恢复时回到客户端的原始限速。
 	ResumeLimitTotal string `json:"resume_limit_total"`
-	ResumeLimitIPv4  string `json:"resume_limit_ipv4"`
-	ResumeLimitIPv6  string `json:"resume_limit_ipv6"`
 
 	ResumeOnWindowReset bool   `json:"resume_on_window_reset"`
 	Cooldown            string `json:"cooldown"`
@@ -193,8 +185,6 @@ func toView(cfg *config.Config) formConfig {
 			Enabled:            c.IsEnabled(),
 			InsecureSkipVerify: c.InsecureSkipVerify,
 			Timeout:            c.Timeout.String(),
-			UploadLimitIPv4:    c.UploadLimitIPv4.Int64(),
-			UploadLimitIPv6:    c.UploadLimitIPv6.Int64(),
 			AuthMode:           c.AuthMode(),
 			HasPassword:        c.Password != "",
 			HasAPIKey:          c.APIKey != "",
@@ -211,14 +201,8 @@ func toView(cfg *config.Config) formConfig {
 			Window:              p.Window.String(),
 			Align:               p.Align,
 			ThresholdTotal:      formatBytesField(p.ThTotal()),
-			ThresholdIPv4:       formatBytesField(p.ThIPv4()),
-			ThresholdIPv6:       formatBytesField(p.ThIPv6()),
 			LimitTotal:          formatBitrateField(p.LimTotal()),
-			LimitIPv4:           formatBitrateField(p.LimIPv4()),
-			LimitIPv6:           formatBitrateField(p.LimIPv6()),
 			ResumeLimitTotal:    formatBitrateField(p.ResumeTotal()),
-			ResumeLimitIPv4:     formatBitrateField(p.ResumeIPv4()),
-			ResumeLimitIPv6:     formatBitrateField(p.ResumeIPv6()),
 			ResumeOnWindowReset: p.ShouldResume(),
 			Cooldown:            p.Cooldown.String(),
 		})
@@ -397,8 +381,6 @@ func applyView(cfg *config.Config, v formConfig) error {
 			Enabled:            boolPtr(cv.Enabled),
 			InsecureSkipVerify: cv.InsecureSkipVerify,
 			Timeout:            timeout,
-			UploadLimitIPv4:    config.Bitrate(cv.UploadLimitIPv4),
-			UploadLimitIPv6:    config.Bitrate(cv.UploadLimitIPv6),
 		}
 
 		// 密码与 API Key 按「未修改 / 清空 / 新值」三态处理。
@@ -436,42 +418,15 @@ func applyView(cfg *config.Config, v formConfig) error {
 		}
 
 		thTotal, err := parseBytesLoose(pv.ThresholdTotal)
-		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的合计阈值: " + err.Error()}
-		}
-		thV4, err := parseBytesLoose(pv.ThresholdIPv4)
-		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv4 阈值: " + err.Error()}
-		}
-		thV6, err := parseBytesLoose(pv.ThresholdIPv6)
-		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv6 阈值: " + err.Error()}
-		}
 		limTotal, err := parseBitrateLoose(pv.LimitTotal)
 		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的合计限速: " + err.Error()}
-		}
-		limV4, err := parseBitrateLoose(pv.LimitIPv4)
-		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv4 限速: " + err.Error()}
-		}
-		limV6, err := parseBitrateLoose(pv.LimitIPv6)
-		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv6 限速: " + err.Error()}
+			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的限速: " + err.Error()}
 		}
 
 		// 解除限速后的速度：留空表示不启用（回到客户端原始限速）。
 		resTotal, err := parseBitrateLoose(pv.ResumeLimitTotal)
 		if err != nil {
 			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的恢复速度: " + err.Error()}
-		}
-		resV4, err := parseBitrateLoose(pv.ResumeLimitIPv4)
-		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv4 恢复速度: " + err.Error()}
-		}
-		resV6, err := parseBitrateLoose(pv.ResumeLimitIPv6)
-		if err != nil {
-			return apiError{Code: 400, Message: "策略 " + pv.Name + " 的 IPv6 恢复速度: " + err.Error()}
 		}
 
 		cooldown := config.Duration(0)
@@ -495,14 +450,8 @@ func applyView(cfg *config.Config, v formConfig) error {
 			Window:              window,
 			Align:               align,
 			ThresholdTotal:      config.Bytes(thTotal),
-			ThresholdIPv4:       config.Bytes(thV4),
-			ThresholdIPv6:       config.Bytes(thV6),
 			LimitTotal:          config.Bitrate(limTotal),
-			LimitIPv4:           config.Bitrate(limV4),
-			LimitIPv6:           config.Bitrate(limV6),
 			ResumeLimitTotal:    config.Bitrate(resTotal),
-			ResumeLimitIPv4:     config.Bitrate(resV4),
-			ResumeLimitIPv6:     config.Bitrate(resV6),
 			ResumeOnWindowReset: boolPtr(pv.ResumeOnWindowReset),
 			Cooldown:            cooldown,
 		})
@@ -620,11 +569,7 @@ func (s *Server) enrichClientViews(v *formConfig) {
 		v.Clients[i].Healthy = snap.Healthy
 		v.Clients[i].LastError = snap.LastError
 		v.Clients[i].UpLimitNow = snap.CurrentUpLimit
-		var up int64
-		for _, sp := range snap.UpSpeed {
-			up += sp
-		}
-		v.Clients[i].UpSpeed = up
+		v.Clients[i].UpSpeed = snap.UpSpeed
 		if snap.Healthy {
 			v.Clients[i].StatusText = "正常"
 		} else {

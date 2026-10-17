@@ -390,15 +390,14 @@ func (s *Server) handleClientTest(w http.ResponseWriter, r *http.Request) error 
 		})
 	}
 	return writeJSON(w, map[string]any{
-		"ok":                    true,
-		"version":               st.Raw["version"],
-		"up_speed":              st.TotalUpSpeed(),
-		"up_total":              st.TotalUpBytes(),
-		"dl_speed":              st.DlSpeed,
-		"torrents":              st.TorrentCount,
-		"peers":                 st.PeerCount,
-		"supports_family_limit": st.SupportsFamilyLimit,
-		"current_up_limit":      st.CurrentUpLimit,
+		"ok":               true,
+		"version":          st.Raw["version"],
+		"up_speed":         st.TotalUpSpeed(),
+		"up_total":         st.TotalUpBytes(),
+		"dl_speed":         st.DlSpeed,
+		"torrents":         st.TorrentCount,
+		"peers":            st.PeerCount,
+		"current_up_limit": st.CurrentUpLimit,
 	})
 }
 
@@ -410,8 +409,6 @@ func (s *Server) handleClientLimit(w http.ResponseWriter, r *http.Request) error
 	var body struct {
 		Name  string `json:"name"`
 		Limit int64  `json:"limit"`
-		IPv4  *int64 `json:"limit_ipv4"`
-		IPv6  *int64 `json:"limit_ipv6"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		return err
@@ -421,16 +418,8 @@ func (s *Server) handleClientLimit(w http.ResponseWriter, r *http.Request) error
 		return apiError{Code: 404, Message: "未找到客户端 " + body.Name}
 	}
 
-	lim := client.SpeedLimit{Total: body.Limit, IPv4: -1, IPv6: -1}
-	if body.IPv4 != nil {
-		lim.IPv4 = *body.IPv4
-		lim.UseFamily = true
-	}
-	if body.IPv6 != nil {
-		lim.IPv6 = *body.IPv6
-		lim.UseFamily = true
-	}
-	if lim.Total < 0 && !lim.UseFamily {
+	lim := client.SpeedLimit{Total: body.Limit}
+	if lim.Total < 0 {
 		return apiError{Code: 400, Message: "limit 不能为负"}
 	}
 

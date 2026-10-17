@@ -1,8 +1,15 @@
-// Package client 定义了 BT 下载器监控与限速的统一抽象。
+// Package client 定义了下载器监控与限速的统一抽象。
 //
-// 每个实现都需要回答两个问题：
-//  1. 当前上传速度是多少（并尽可能区分 IPv4 / IPv6）
+// 每个实现只需要回答两个问题：
+//  1. 当前上传速度与累计上传量是多少（单一总量，不区分地址族）
 //  2. 把上传限速调到多少
+//
+// 关于 IPv4 / IPv6：
+// 早期版本尝试区分地址族，但 qBittorrent 与 Transmission 的公开 API
+// 都不提供可靠的分族累计量 —— Transmission 只能按当前 peer 占比估算，
+// qBittorrent 的 peer 明细在保种空闲时经常缺失。
+// 强行估算会产生数量级错误（曾出现 2 TB 级的虚假累计），
+// 因此自 v1.1 起只统计【总上传量】，不再区分地址族。
 package client
 
 import (
@@ -18,41 +25,17 @@ import (
 // 数据结构
 // ---------------------------------------------------------------------------
 
-// Family 表示一条流量的地址族。
-type Family string
-
-const (
-	// FamilyIPv4 表示 IPv4 流量。
-	FamilyIPv4 Family = "ipv4"
-	// FamilyIPv6 表示 IPv6 流量。
-	FamilyIPv6 Family = "ipv6"
-	// FamilyUnknown 表示无法区分地址族的流量。
-	FamilyUnknown Family = "unknown"
-)
-
-// Families 返回全部地址族，顺序固定。
-func Families() []Family { return []Family{FamilyIPv4, FamilyIPv6, FamilyUnknown} }
-
 // Stats 是一次采样的结果。
 type Stats struct {
 	// Timestamp 是采样时刻。
 	Timestamp time.Time `json:"ts"`
-	// UpSpeed 是各地址族的上传速度（字节/秒）。
-	UpSpeed map[Family]int64 `json:"up_speed"`
-	// UpTotal 是各地址族自客户端启动以来的累计上传字节数。
+	// UpSpeed 是当前上传速度（字节/秒）。
+	UpSpeed int64 `json:"up_speed"`
+	// UpTotal 是客户端自启动以来的累计上传字节数。
 	//
-	// 注意：只有 FamilyTotalEstimated 为 false 时，
-	// 这个映射里的值才是【可信的单调递增计数器】。
-	UpTotal map[Family]int64 `json:"up_total"`
-	// FamilyTotalEstimated 表示 UpTotal 的分族数值是【估算】出来的，
-	// 而非客户端直接提供的计数器。
-	//
-	// 为 true 时（例如 Transmission 按 peer 占比分摊）：
-	// 某族的数值会随 peer 增减而上下跳动，甚至变小。
-	// 调用方【不得】把「数值变小」当作客户端重启，
-	// 也不应使用差值得出增量，否则 peer 每波动一次
-	// 就会灌入巨量虚假流量。
-	FamilyTotalEstimated bool `json:"family_total_estimated,omitempty"`
+	// 这是客户端自己维护的单调递增计数器，
+	// 调用方用两次采样的差值来计算增量。
+	UpTotal int64 `json:"up_total"`
 	// DlSpeed 是下载速度（字节/秒），仅用于展示。
 	DlSpeed int64 `json:"dl_speed"`
 	// PeerCount / TorrentCount 用于展示与排障。
@@ -62,32 +45,18 @@ type Stats struct {
 	SpeedLimited bool `json:"speed_limited"`
 	// CurrentUpLimit 是客户端当前生效的上传限速（字节/秒，-1 表示未查询/未知，0 表示不限速）。
 	CurrentUpLimit int64 `json:"current_up_limit"`
-	// SupportsFamilyLimit 表示该客户端/版本是否支持 IPv4/IPv6 分开限速。
-	SupportsFamilyLimit bool `json:"supports_family_limit"`
 	// Raw 可携带客户端原始响应，便于排障。
 	Raw map[string]any `json:"-"`
 }
 
-// TotalUpSpeed 返回所有地址族的上传速度合计。
-func (s Stats) TotalUpSpeed() int64 {
-	var n int64
-	for _, v := range s.UpSpeed {
-		n += v
-	}
-	return n
-}
+// TotalUpSpeed 返回当前上传速度。
+//
+// 保留这个方法名是为了让调用方语义清晰（「总量」而非「某族」），
+// 现在它就是 UpSpeed 本身。
+func (s Stats) TotalUpSpeed() int64 { return s.UpSpeed }
 
-// TotalUpBytes 返回所有地址族的累计上传字节合计。
-func (s Stats) TotalUpBytes() int64 {
-	var n int64
-	for _, v := range s.UpTotal {
-		n += v
-	}
-	return n
-}
-
-// SpeedOf 返回指定地址族的上传速度。
-func (s Stats) SpeedOf(f Family) int64 { return s.UpSpeed[f] }
+// TotalUpBytes 返回累计上传字节数。
+func (s Stats) TotalUpBytes() int64 { return s.UpTotal }
 
 // ---------------------------------------------------------------------------
 // 接口
@@ -95,24 +64,18 @@ func (s Stats) SpeedOf(f Family) int64 { return s.UpSpeed[f] }
 
 // SpeedLimit 描述要施加的上传限速。
 //
-//	Total == -1 表示「不修改总限速」
+//	Total == -1 表示「不修改限速」
 //	Total == 0  表示「取消限速（无限速）」
 //	Total >  0  表示「限制为该字节/秒」
-//
-// IPv4 / IPv6 同理，仅在 SupportsFamilyLimit 的客户端上生效。
 type SpeedLimit struct {
 	Total int64 `json:"total"`
-	IPv4  int64 `json:"ipv4"`
-	IPv6  int64 `json:"ipv6"`
-	// UseFamily 为 true 时优先下发分族限速。
-	UseFamily bool `json:"use_family"`
 }
 
 // NewNoopLimit 返回一个「不做任何修改」的限速指令。
-func NewNoopLimit() SpeedLimit { return SpeedLimit{Total: -1, IPv4: -1, IPv6: -1} }
+func NewNoopLimit() SpeedLimit { return SpeedLimit{Total: -1} }
 
-// NewUnlimited 返回一个「取消所有限速」的指令。
-func NewUnlimited() SpeedLimit { return SpeedLimit{Total: 0, IPv4: 0, IPv6: 0} }
+// NewUnlimited 返回一个「取消限速」的指令。
+func NewUnlimited() SpeedLimit { return SpeedLimit{Total: 0} }
 
 // Client 是所有下载器实现的统一接口。
 type Client interface {

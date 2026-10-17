@@ -93,14 +93,12 @@
   .sub{color:var(--muted); font-size:12.5px; margin-top:3px}
   .row{display:flex; align-items:center; justify-content:space-between; gap:10px}
   .row+.row{margin-top:7px}
-  .fam{display:inline-flex; align-items:center; gap:7px; font-variant-numeric:tabular-nums}
   /* 表格单元格的两行结构：主值 + 次要说明。
      注意 .cell-sub 里的 .fam 是 inline-flex，会遵循父级 text-align，
      这样表头（右对齐）与数据就能对齐 —— 之前用 display:flex
      会让子行强制左对齐，看起来「表头和数据没对齐」。 */
   .cell-main{font-weight:600}
   .cell-sub{display:flex; flex-direction:column; align-items:flex-end; gap:1px; margin-top:2px}
-  .cell-sub .fam{justify-content:flex-end}
   /* 数字 + 单位下拉的组合输入框 */
   .numfield{display:flex; gap:6px; align-items:stretch}
   .numfield .num-in{flex:1 1 auto; min-width:0}
@@ -292,9 +290,7 @@
         <h2>上传速度（实时）</h2>
         <canvas id="chart-speed" height="170"></canvas>
         <div class="legend">
-          <span><i class="dot v4"></i>IPv4</span>
-          <span><i class="dot v6"></i>IPv6</span>
-          <span><i class="dot unk"></i>未分类</span>
+          <span><i class="dot v4"></i>上传速度</span>
         </div>
       </div>
       <div class="card">
@@ -560,7 +556,6 @@
 // ---------------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 
-const FAM = { ipv4: "IPv4", ipv6: "IPv6", unknown: "未分类" };
 // 图表配色改为从 CSS 变量读取，这样切换主题后重绘即自动适配。
 // 放在函数里而不是常量，是因为变量值会随 data-theme 变化。
 function themeColors() {
@@ -764,27 +759,20 @@ function renderHeader(st) {
 
 function renderMetrics(st) {
   const agg = st.aggregate || {};
-  const up = agg.up_speed || {};
-  const total = (up.ipv4 || 0) + (up.ipv6 || 0) + (up.unknown || 0);
+  const total = agg.up_speed || 0;
 
   $("m-speed").textContent = fmtBytes(total) + "/s";
-  $("m-speed-fam").innerHTML =
-    `<span class="fam"><i class="dot v4"></i>${fmtBytes(up.ipv4 || 0)}/s</span>` +
-    ` &nbsp; <span class="fam"><i class="dot v6"></i>${fmtBytes(up.ipv6 || 0)}/s</span>` +
-    ((up.unknown || 0) > 0 ? ` &nbsp; <span class="fam"><i class="dot unk"></i>${fmtBytes(up.unknown || 0)}/s</span>` : "");
+  const famEl = $("m-speed-fam");
+  if (famEl) famEl.textContent = "";
 
   // 周期累计：取最"紧张"的那条策略
-  const win = agg.window_bytes || {};
-  const winTotal = (win.ipv4 || 0) + (win.ipv6 || 0) + (win.unknown || 0);
-  $("m-window").textContent = fmtBytes(winTotal);
+  $("m-window").textContent = fmtBytes(agg.window_bytes || 0);
 
   let progress = 0, target = 0, polLabel = "";
   let best = null;
   for (const p of (st.policies || [])) {
     if (!p.enabled) continue;
-    const th = p.threshold_ipv4 > 0 && p.threshold_ipv6 > 0
-      ? Math.min(p.threshold_ipv4, p.threshold_ipv6)
-      : (p.threshold_total > 0 ? p.threshold_total : Math.max(p.threshold_ipv4 || 0, p.threshold_ipv6 || 0));
+    const th = p.threshold_total || 0;
     if (th <= 0) continue;
     const ratio = p.current_total / th;
     if (!best || ratio > best.ratio) best = { ratio, p, th };
@@ -805,10 +793,7 @@ function renderMetrics(st) {
   if (limited.length) {
     $("m-limit").innerHTML = `<span style="color:var(--err)">已限速</span>`;
     const p = limited[0];
-    const lim = p.limit_total > 0 ? fmtSpeed(p.limit_total)
-      : (p.limit_ipv4 > 0 || p.limit_ipv6 > 0
-        ? [p.limit_ipv4 > 0 ? "v4 " + fmtSpeed(p.limit_ipv4) : "", p.limit_ipv6 > 0 ? "v6 " + fmtSpeed(p.limit_ipv6) : ""].filter(Boolean).join(" / ")
-        : "—");
+    const lim = p.limit_total > 0 ? fmtSpeed(p.limit_total) : "—";
     $("m-limit-sub").textContent = `上限 ${lim} · 已持续 ${p.limited_for || "—"}`;
   } else {
     $("m-limit").innerHTML = `<span style="color:var(--ok)">正常</span>`;
@@ -839,15 +824,8 @@ function renderClientsTable(st) {
   for (const c of cls) {
     const up = c.up_speed || {};
     const win = c.window_bytes || {};
-    const totalSpeed = (up.ipv4 || 0) + (up.ipv6 || 0) + (up.unknown || 0);
-    const totalWin = (win.ipv4 || 0) + (win.ipv6 || 0) + (win.unknown || 0);
-
-    const famParts = [];
-    if (up.ipv4 >= 0) famParts.push(`<span class="fam"><i class="dot v4"></i>${fmtBytes(up.ipv4 || 0)}/s</span>`);
-    if (up.ipv6 >= 0) famParts.push(`<span class="fam"><i class="dot v6"></i>${fmtBytes(up.ipv6 || 0)}/s</span>`);
-    if ((up.unknown || 0) > 0 && !c.supports_family_limit) {
-      famParts.push(`<span class="fam"><i class="dot unk"></i>${fmtBytes(up.unknown)}/s</span>`);
-    }
+    const totalSpeed = up || 0;
+    const totalWin = win || 0;
 
     const statusPill = c.healthy
       ? `<span class="pill off">正常</span>`
@@ -862,14 +840,8 @@ function renderClientsTable(st) {
         ${c.healthy ? `<div class="sub" style="margin:2px 0 0">${fmtAgo(c.last_seen)}</div>` : ""}
         ${!c.healthy && c.last_error ? `<div class="sub" style="margin:2px 0 0;max-width:260px;white-space:normal;color:var(--err)">${esc(c.last_error)}</div>` : ""}
       </td>
-      <td class="num">
-        <div class="cell-main">${fmtBytes(totalSpeed)}/s</div>
-        <div class="cell-sub">${famParts.join("")}</div>
-      </td>
-      <td class="num">
-        <div class="cell-main">${fmtBytes(totalWin)}</div>
-        <div class="cell-sub">v4 ${fmtBytes(win.ipv4 || 0)} · v6 ${fmtBytes(win.ipv6 || 0)}</div>
-      </td>
+      <td class="num">${fmtBytes(totalSpeed)}/s</td>
+      <td class="num">${fmtBytes(totalWin)}</td>
       <td class="num">${fmtBytes(c.dl_speed || 0)}/s</td>
       <td class="num">${c.torrents || 0} / ${c.peers || 0}</td>
       <td class="num">${c.current_up_limit > 0 ? fmtBytes(c.current_up_limit) + "/s" : '<span style="color:var(--ok)">不限速</span>'}</td>
@@ -910,22 +882,13 @@ function renderPolicies(st) {
   let html = "";
   for (const p of ps) {
     const ths = [];
-    if (p.threshold_total > 0) ths.push(`合计 ${fmtBytes(p.threshold_total)}`);
-    if (p.threshold_ipv4 > 0) ths.push(`IPv4 ${fmtBytes(p.threshold_ipv4)}`);
-    if (p.threshold_ipv6 > 0) ths.push(`IPv6 ${fmtBytes(p.threshold_ipv6)}`);
+    if (p.threshold_total > 0) ths.push(fmtBytes(p.threshold_total));
 
     const lims = [];
     if (p.limit_total > 0) lims.push(fmtBytes(p.limit_total) + "/s");
-    if (p.limit_ipv4 > 0) lims.push("IPv4 " + fmtBytes(p.limit_ipv4) + "/s");
-    if (p.limit_ipv6 > 0) lims.push("IPv6 " + fmtBytes(p.limit_ipv6) + "/s");
     if (!lims.length) lims.push("不限速");
 
-    const cur4 = (p.current_family && p.current_family.ipv4) || 0;
-    const cur6 = (p.current_family && p.current_family.ipv6) || 0;
-
     const pctTotal = ((p.progress_total || 0) * 100).toFixed(1);
-    const pct4 = ((p.progress_ipv4 || 0) * 100).toFixed(1);
-    const pct6 = ((p.progress_ipv6 || 0) * 100).toFixed(1);
 
     html += `<div class="card" style="margin-bottom:14px">
       <div class="row" style="margin-bottom:10px">
@@ -961,14 +924,8 @@ function renderPolicies(st) {
         <div>
           <div class="sub">本周期累计上传</div>
           <div style="font-size:19px;font-weight:600">${fmtBytes(p.current_total)}</div>
-          <div class="row" style="margin-top:6px">
-            <span class="fam"><i class="dot v4"></i>IPv4</span><span>${fmtBytes(cur4)}</span>
-          </div>
-          <div class="bar"><i class="v4" style="width:${Math.min(100, pct4)}%"></i></div>
-          <div class="row" style="margin-top:6px">
-            <span class="fam"><i class="dot v6"></i>IPv6</span><span>${fmtBytes(cur6)}</span>
-          </div>
-          <div class="bar"><i class="v6" style="width:${Math.min(100, pct6)}%"></i></div>
+          <div class="sub">使用率 ${((p.threshold_total > 0) ? (p.current_total / p.threshold_total * 100).toFixed(1) : "0.0")}%</div>
+          <div class="bar"><i class="v4" style="width:${Math.min(100, p.threshold_total > 0 ? p.current_total / p.threshold_total * 100 : 0)}%"></i></div>
         </div>
 
         <div>
@@ -1048,16 +1005,12 @@ function renderCharts(samples) {
   const tc = themeColors();
 
   const speedSeries = [
-    { color: tc.v4, data: samples.map(s => (s.up && s.up.ipv4) || 0) },
-    { color: tc.v6, data: samples.map(s => (s.up && s.up.ipv6) || 0) },
+    { color: tc.v4, data: samples.map(s => s.up || 0) },
   ];
-  const hasUnknown = samples.some(s => (s.up && s.up.unknown) > 0);
-  if (hasUnknown) speedSeries.push({ color: tc.unk, data: samples.map(s => (s.up && s.up.unknown) || 0) });
 
   drawAreaChart($("chart-speed"), speedSeries, {
     yLabel: samples.length ? fmtSpeedPlain(Math.max(...samples.map(s => {
-      const u = s.up || {};
-      return (u.ipv4 || 0) + (u.ipv6 || 0) + (u.unknown || 0);
+      return s.up || 0;
     }))) + " 峰值" : ""
   });
 
@@ -1154,8 +1107,7 @@ function clientTemplate() {
   return {
     name: "", type: "qbittorrent", url: "", username: "", password: "",
     api_key: "", enabled: true, insecure_skip_verify: false, timeout: "10s",
-    upload_limit_ipv4: 0, upload_limit_ipv6: 0,
-    auth_mode: "无认证", has_password: false, has_api_key: false,
+        auth_mode: "无认证", has_password: false, has_api_key: false,
     api_key_hint: "", supports_api_key: true
   };
 }
@@ -1483,9 +1435,9 @@ function policyTemplate() {
   return {
     name: "", enabled: true, clients: ["*"],
     window: "24h", align: "day",
-    threshold_total: "500GiB", threshold_ipv4: "", threshold_ipv6: "",
-    limit_total: "1MiB", limit_ipv4: "", limit_ipv6: "",
-    resume_limit_total: "", resume_limit_ipv4: "", resume_limit_ipv6: "",
+    threshold_total: "500GiB",
+    limit_total: "1MiB",
+    resume_limit_total: "",
     resume_on_window_reset: true, cooldown: "10m"
   };
 }
@@ -1558,55 +1510,25 @@ function renderPolicyForms() {
 
       <div class="grid-fields">
         <div class="field">
-          <label>触发阈值：合计</label>
-          ${sizeField("threshold_total", i, p.threshold_total, "留空表示不判断")}
+          <label>触发阈值</label>
+          ${sizeField("threshold_total", i, p.threshold_total, "必填")}
+          <div class="fhint">本周期内上传总量达到这个值就限速。</div>
         </div>
-        <div class="field">
-          <label>触发阈值：仅 IPv4</label>
-          ${sizeField("threshold_ipv4", i, p.threshold_ipv4, "留空表示不判断")}
-        </div>
-        <div class="field">
-          <label>触发阈值：仅 IPv6</label>
-          ${sizeField("threshold_ipv6", i, p.threshold_ipv6, "留空表示不判断")}
-        </div>
-      </div>
-      <div class="fhint" style="margin:-6px 0 14px">
-        三个阈值是「或」的关系，任意一个满足就限速。至少填一个。
       </div>
 
       <div class="grid-fields">
         <div class="field">
-          <label>限速值：全局</label>
+          <label>限速值</label>
           ${rateField("limit_total", i, p.limit_total, "0 = 不限速")}
-          <div class="fhint">触发限速后把上传压到这个速度。</div>
+          <div class="fhint">触发后把上传压到这个速度。</div>
         </div>
         <div class="field">
-          <label>限速值：仅 IPv4</label>
-          ${rateField("limit_ipv4", i, p.limit_ipv4, "留空")}
-        </div>
-        <div class="field">
-          <label>限速值：仅 IPv6</label>
-          ${rateField("limit_ipv6", i, p.limit_ipv6, "留空")}
-        </div>
-      </div>
-
-      <div class="grid-fields">
-        <div class="field">
-          <label>解除限速后的速度（全局）</label>
+          <label>解除限速后的速度</label>
           ${rateField("resume_limit_total", i, p.resume_limit_total, "留空 = 恢复原限速")}
           <div class="fhint">
-            周期结束后回到的速度。<br>
             <b>留空</b>：恢复到触发前的原始限速（通常完全不限速）。<br>
             填 <b>0</b>：显式表示不限速。
           </div>
-        </div>
-        <div class="field">
-          <label>解除限速后的速度：仅 IPv4</label>
-          ${rateField("resume_limit_ipv4", i, p.resume_limit_ipv4, "留空")}
-        </div>
-        <div class="field">
-          <label>解除限速后的速度：仅 IPv6</label>
-          ${rateField("resume_limit_ipv6", i, p.resume_limit_ipv6, "留空")}
         </div>
       </div>
 
@@ -1675,9 +1597,7 @@ function collectPolicyInputs() {
   // 数值字段现在是「数字输入框 + 单位下拉」两个元素，
   // 不能只读 el.value，必须拼回 "5MiB" 这样的形式。
   const numFields = new Set([
-    "threshold_total", "threshold_ipv4", "threshold_ipv6",
-    "limit_total", "limit_ipv4", "limit_ipv6",
-    "resume_limit_total", "resume_limit_ipv4", "resume_limit_ipv6",
+    "threshold_total", "limit_total", "resume_limit_total",
   ]);
 
   document.querySelectorAll("[data-pf]").forEach(el => {

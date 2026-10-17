@@ -2,28 +2,6 @@ package client
 
 import "testing"
 
-func TestClassifyIP(t *testing.T) {
-	cases := []struct {
-		in   string
-		want Family
-	}{
-		{"1.2.3.4", FamilyIPv4},
-		{"1.2.3.4:6881", FamilyIPv4},
-		{"255.255.255.255", FamilyIPv4},
-		{"2001:db8::1", FamilyIPv6},
-		{"[2001:db8::1]:51413", FamilyIPv6},
-		{"::1", FamilyIPv6},
-		{"fe80::1%eth0", FamilyIPv6},
-		{"", FamilyUnknown},
-		{"not-an-ip", FamilyUnknown},
-	}
-	for _, c := range cases {
-		if got := classifyIP(c.in); got != c.want {
-			t.Errorf("classifyIP(%q) = %q, 期望 %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestCoerceInt64(t *testing.T) {
 	cases := []struct {
 		in   any
@@ -66,8 +44,7 @@ func TestCoerceBool(t *testing.T) {
 	}
 }
 
-// TestVersionAtLeast 验证 qBittorrent 版本比较，
-// 用于判断是否支持分族限速（4.6.0+）。
+// TestVersionAtLeast 验证 qBittorrent 版本比较（用于 API Key 版本提示）。
 func TestVersionAtLeast(t *testing.T) {
 	cases := []struct {
 		v    string
@@ -105,16 +82,13 @@ func TestSpeedLimitHelpers(t *testing.T) {
 
 func TestStatsTotals(t *testing.T) {
 	s := Stats{
-		UpSpeed: map[Family]int64{FamilyIPv4: 100, FamilyIPv6: 200},
-		UpTotal: map[Family]int64{FamilyIPv4: 1000, FamilyIPv6: 2000},
+		UpSpeed: 300,
+		UpTotal: 3000,
 	}
 	if got := s.TotalUpSpeed(); got != 300 {
 		t.Errorf("TotalUpSpeed() = %d, 期望 300", got)
 	}
 	if got := s.TotalUpBytes(); got != 3000 {
 		t.Errorf("TotalUpBytes() = %d, 期望 3000", got)
-	}
-	if got := s.SpeedOf(FamilyIPv6); got != 200 {
-		t.Errorf("SpeedOf(ipv6) = %d, 期望 200", got)
 	}
 }

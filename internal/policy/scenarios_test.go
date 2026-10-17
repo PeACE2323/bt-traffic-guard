@@ -268,35 +268,7 @@ func TestVeryLongWindow(t *testing.T) {
 	}
 }
 
-// TestZeroThresholdDoesNotTrigger 验证阈值为 0 的分族不会误触发。
-func TestZeroThresholdDoesNotTrigger(t *testing.T) {
-	fc := newFakeClient("c")
-	reg := client.NewRegistry()
-	reg.Add(client.NewManaged(fc))
-	mon := traffic.NewMonitor(reg, time.Second, 100)
-	eng := NewEngine(reg, mon, &recordingNotifier{}, func(string, string, ...any) {}, time.UTC)
-
-	yes := true
-	eng.Load([]config.PolicyConfig{{
-		Name: "p", Enabled: &yes, Clients: []string{"*"},
-		Window: config.Duration(time.Hour), Align: "rolling",
-		ThresholdTotal:      config.Bytes(0), // 不判断
-		ThresholdIPv4:       config.Bytes(0), // 不判断
-		ThresholdIPv6:       config.Bytes(1000),
-		LimitTotal:          config.Bitrate(100),
-		ResumeOnWindowReset: &yes,
-	}})
-
-	// 制造大量 IPv4 流量（假客户端只上报 IPv4），按真实节奏累积
-	t0 := time.Now()
-	mon.PollOnce(context.Background(), t0)
-	accumulateInSteps(mon, fc, t0, 100000, 1024)
-	eng.Evaluate(context.Background())
-
-	if eng.States()[0].Limited {
-		t.Error("只配了 IPv6 阈值时，IPv4 流量不应触发限速")
-	}
-}
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // 并发求值
@@ -305,7 +277,8 @@ func TestZeroThresholdDoesNotTrigger(t *testing.T) {
 // TestConcurrentEvaluate 验证并发调用 Evaluate 不会数据竞争或 panic。
 //
 // 现实中 Evaluate 由定时器驱动，但 WebUI 的手动操作
-// （触发/解除）可能与之并发。
+// （触发/解除）可能与之并发 —— 这正是曾经导致
+// "concurrent map writes" 致命崩溃的场景。
 func TestConcurrentEvaluate(t *testing.T) {
 	fc := newFakeClient("c")
 	reg := client.NewRegistry()
@@ -329,7 +302,7 @@ func TestConcurrentEvaluate(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; ; i++ {
+		for {
 			select {
 			case <-stop:
 				return
@@ -454,9 +427,9 @@ func TestWindowRollAtExactBoundary(t *testing.T) {
 		ResumeOnWindowReset: &yes,
 	}})
 
-	t0 := time.Now()
-	mon.PollOnce(context.Background(), t0)
-	accumulateInSteps(mon, fc, t0, 2000, 1024)
+	mon.PollOnce(context.Background(), time.Now())
+	fc.addBytes(2000)
+	mon.PollOnce(context.Background(), time.Now())
 	eng.Evaluate(context.Background())
 
 	if !eng.States()[0].Limited {
@@ -504,9 +477,9 @@ func TestManyRapidRolls(t *testing.T) {
 		ResumeOnWindowReset: &yes,
 	}})
 
-	t0 := time.Now()
-	mon.PollOnce(context.Background(), t0)
-	accumulateInSteps(mon, fc, t0, 2000, 1024)
+	mon.PollOnce(context.Background(), time.Now())
+	fc.addBytes(2000)
+	mon.PollOnce(context.Background(), time.Now())
 	eng.Evaluate(context.Background())
 
 	// 把窗口终点设为很久以前（相当于休眠了 10 个周期）

@@ -262,7 +262,7 @@ func TestSetUploadLimitWithAPIKey(t *testing.T) {
 		Timeout: 5 * time.Second,
 	})
 
-	err := c.SetUploadLimit(context.Background(), SpeedLimit{Total: 1 << 20, IPv4: -1, IPv6: -1})
+	err := c.SetUploadLimit(context.Background(), SpeedLimit{Total: 1 << 20})
 	if err != nil {
 		t.Fatalf("下发限速失败: %v", err)
 	}

@@ -10,7 +10,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// 可控的假客户端
+// 测试替身
 // ---------------------------------------------------------------------------
 
 // scriptedClient 让测试能精确控制每次 Fetch 上报的速率与累计量。
@@ -38,8 +38,8 @@ func (s *scriptedClient) Fetch(_ context.Context) (client.Stats, error) {
 	}
 	return client.Stats{
 		Timestamp:      time.Now(),
-		UpSpeed:        map[client.Family]int64{client.FamilyIPv4: s.upSpeed},
-		UpTotal:        map[client.Family]int64{client.FamilyIPv4: s.upTotal},
+		UpSpeed:        s.upSpeed,
+		UpTotal:        s.upTotal,
 		CurrentUpLimit: s.selfLimit,
 	}, nil
 }
@@ -72,13 +72,13 @@ func newMon(t *testing.T) (*Monitor, *scriptedClient) {
 	return NewMonitor(reg, time.Second, 50), sc
 }
 
-// familyBytes 取某族的周期累计量。
-func familyBytes(m *Monitor, name string, f client.Family) int64 {
+// windowBytes 取某客户端的周期累计；查不到返回 -1。
+func windowBytes(m *Monitor, name string) int64 {
 	s, ok := m.Snapshot(name)
 	if !ok {
 		return -1
 	}
-	return s.WindowBytes[f]
+	return s.WindowBytes
 }
 
 // ---------------------------------------------------------------------------
@@ -87,19 +87,18 @@ func familyBytes(m *Monitor, name string, f client.Family) int64 {
 
 // TestFirstPollEstablishesBaseline 验证首次采样只建立基线、不计入周期。
 //
-// 原因：客户端的 uploadedBytes 是自其启动以来的总量，
+// 原因：客户端的累计上传量是自其启动以来的总量，
 // 首次采样若直接计入，会把「历史流量」算进当前周期，
 // 导致策略一启动就误判超限。
 func TestFirstPollEstablishesBaseline(t *testing.T) {
 	m, sc := newMon(t)
 	ctx := context.Background()
-	now := time.Now()
 
 	// 客户端已累计上传 100 GiB（历史流量）
 	sc.set(0, 100<<30)
-	m.PollOnce(ctx, now)
+	m.PollOnce(ctx, time.Now())
 
-	if got := familyBytes(m, "c1", client.FamilyIPv4); got != 0 {
+	if got := windowBytes(m, "c1"); got != 0 {
 		t.Errorf("首次采样后周期累计 = %d, 期望 0（历史流量不应计入本周期）", got)
 	}
 }
@@ -107,8 +106,7 @@ func TestFirstPollEstablishesBaseline(t *testing.T) {
 // TestDeltaAccumulation 验证按客户端自报累计量的差值累加。
 //
 // 注意测试数据必须【物理自洽】：速率与增量要匹配，
-// 因为 monitor 对单次增量有一个「峰值速率 × 间隔」的防御性上限
-// （见 PollOnce 中对 maxDelta 的处理），
+// 因为 monitor 对单次增量有一个「峰值速率 × 间隔」的防御性上限，
 // 若构造出「1 秒内以 1024 B/s 传出 5000 字节」这种不可能的数据，
 // 会被该上限截断，测试就会误报。
 func TestDeltaAccumulation(t *testing.T) {
@@ -125,7 +123,7 @@ func TestDeltaAccumulation(t *testing.T) {
 	sc.set(rate, 1000+rate)
 	m.PollOnce(ctx, t0.Add(time.Second))
 
-	if got := familyBytes(m, "c1", client.FamilyIPv4); got != rate {
+	if got := windowBytes(m, "c1"); got != rate {
 		t.Errorf("周期累计 = %d, 期望 %d", got, rate)
 	}
 
@@ -133,7 +131,7 @@ func TestDeltaAccumulation(t *testing.T) {
 	sc.set(rate, 1000+2*rate)
 	m.PollOnce(ctx, t0.Add(2*time.Second))
 
-	if got := familyBytes(m, "c1", client.FamilyIPv4); got != 2*rate {
+	if got := windowBytes(m, "c1"); got != 2*rate {
 		t.Errorf("周期累计 = %d, 期望 %d", got, 2*rate)
 	}
 }
@@ -153,7 +151,7 @@ func TestClientRestartFallsBackToIntegration(t *testing.T) {
 
 	sc.set(rate, rate)
 	m.PollOnce(ctx, t0.Add(time.Second))
-	before := familyBytes(m, "c1", client.FamilyIPv4)
+	before := windowBytes(m, "c1")
 	if before != rate {
 		t.Fatalf("前置条件不成立，周期累计 = %d, 期望 %d", before, rate)
 	}
@@ -162,7 +160,7 @@ func TestClientRestartFallsBackToIntegration(t *testing.T) {
 	sc.set(rate, 0)
 	m.PollOnce(ctx, t0.Add(2*time.Second))
 
-	after := familyBytes(m, "c1", client.FamilyIPv4)
+	after := windowBytes(m, "c1")
 	if after < before {
 		t.Errorf("客户端重启后累计量不应减少: %d -> %d", before, after)
 	}
@@ -185,7 +183,7 @@ func TestNoCumulativeUsesIntegration(t *testing.T) {
 	sc.set(2048, 0)
 	m.PollOnce(ctx, t0.Add(time.Second))
 
-	got := familyBytes(m, "c1", client.FamilyIPv4)
+	got := windowBytes(m, "c1")
 	// 梯形法：平均速率 2048 × 1s = 2048
 	if got < 1800 || got > 2300 {
 		t.Errorf("速率积分结果 = %d, 期望约 2048", got)
@@ -208,7 +206,7 @@ func TestDeltaGuardAgainstSpike(t *testing.T) {
 	sc.set(100, 1<<50)
 	m.PollOnce(ctx, t0.Add(time.Second))
 
-	got := familyBytes(m, "c1", client.FamilyIPv4)
+	got := windowBytes(m, "c1")
 	// 上限 = max(前后速率) × (间隔秒数+1) × 2 = 100 × 2 × 2 = 400
 	if got > 400 {
 		t.Errorf("异常增量未被限制: %d（上限应约 400）", got)
@@ -227,14 +225,14 @@ func TestFetchErrorKeepsLastSnapshot(t *testing.T) {
 	sc.set(1024, 5000)
 	m.PollOnce(ctx, t0.Add(time.Second))
 
-	before := familyBytes(m, "c1", client.FamilyIPv4)
+	before := windowBytes(m, "c1")
 	snapBefore, _ := m.Snapshot("c1")
 
 	// 采集失败
 	sc.fail(context.DeadlineExceeded)
 	m.PollOnce(ctx, t0.Add(2*time.Second))
 
-	after := familyBytes(m, "c1", client.FamilyIPv4)
+	after := windowBytes(m, "c1")
 	if after != before {
 		t.Errorf("采集失败不应改变累计量: %d -> %d", before, after)
 	}
@@ -249,7 +247,7 @@ func TestFetchErrorKeepsLastSnapshot(t *testing.T) {
 		t.Error("失败后应记录错误信息")
 	}
 	// 速率应保留上一次的值，便于界面显示最后一次已知状态
-	if snap.UpSpeed[client.FamilyIPv4] != snapBefore.UpSpeed[client.FamilyIPv4] {
+	if snap.UpSpeed != snapBefore.UpSpeed {
 		t.Error("失败后应保留上一次的速率")
 	}
 }
@@ -272,13 +270,13 @@ func TestResetWindowZeroesAccumulation(t *testing.T) {
 	sc.set(rate, 2*rate)
 	m.PollOnce(ctx, t0.Add(2*time.Second))
 
-	if got := familyBytes(m, "c1", client.FamilyIPv4); got != 2*rate {
+	if got := windowBytes(m, "c1"); got != 2*rate {
 		t.Fatalf("前置条件不成立: %d", got)
 	}
 
 	m.ResetWindow([]string{"c1"})
 
-	if got := familyBytes(m, "c1", client.FamilyIPv4); got != 0 {
+	if got := windowBytes(m, "c1"); got != 0 {
 		t.Errorf("重置后周期累计 = %d, 期望 0", got)
 	}
 
@@ -286,53 +284,8 @@ func TestResetWindowZeroesAccumulation(t *testing.T) {
 	sc.set(rate, 3*rate)
 	m.PollOnce(ctx, t0.Add(3*time.Second))
 
-	if got := familyBytes(m, "c1", client.FamilyIPv4); got != rate {
+	if got := windowBytes(m, "c1"); got != rate {
 		t.Errorf("重置后累计 = %d, 期望 %d（只算增量 3MiB-2MiB）", got, rate)
-	}
-}
-
-// TestResetWindowFamilies 验证可以只重置指定地址族。
-//
-// 这里直接构造内部计数器状态，绕开 Fetch，
-// 因为 scriptedClient 只上报 IPv4，无法通过采样造出 IPv6 的量。
-func TestResetWindowFamilies(t *testing.T) {
-	sc := &scriptedClient{name: "c1"}
-	reg := client.NewRegistry()
-	reg.Add(client.NewManaged(sc))
-	m := NewMonitor(reg, time.Second, 50)
-
-	// 关键：先采样一次建立基线，否则 Snapshot 会返回零值快照，
-	// familyBytes 会以为「查不到客户端」而返回 -1。
-	m.PollOnce(context.Background(), time.Now())
-
-	m.mu.Lock()
-	fams := m.ensureCounters("c1")
-	fams[client.FamilyIPv4].windowBytes = 1000
-	fams[client.FamilyIPv6].windowBytes = 2000
-	// 同步写回快照，供 familyBytes 读取
-	snap := m.snapshots["c1"]
-	snap.WindowBytes = map[client.Family]int64{
-		client.FamilyIPv4: 1000,
-		client.FamilyIPv6: 2000,
-	}
-	m.snapshots["c1"] = snap
-	m.mu.Unlock()
-
-	m.ResetWindowFamilies("c1", []client.Family{client.FamilyIPv4})
-
-	// 注意：ResetWindowFamilies 只改计数器，快照要等下次采样才刷新，
-	// 因此这里直接读计数器验证。
-	m.mu.RLock()
-	fams = m.counters["c1"]
-	v4 := fams[client.FamilyIPv4].windowBytes
-	v6 := fams[client.FamilyIPv6].windowBytes
-	m.mu.RUnlock()
-
-	if v4 != 0 {
-		t.Errorf("IPv4 计数器应被清零，实际 %d", v4)
-	}
-	if v6 != 2000 {
-		t.Errorf("IPv6 计数器不应受影响，实际 %d", v6)
 	}
 }
 
@@ -359,11 +312,11 @@ func TestAggregateSumsAllClients(t *testing.T) {
 	m.PollOnce(ctx, t0.Add(time.Second))
 
 	agg := m.Aggregate()
-	if agg.UpSpeed[client.FamilyIPv4] != 3000 {
-		t.Errorf("聚合速率 = %d, 期望 3000", agg.UpSpeed[client.FamilyIPv4])
+	if agg.UpSpeed != 3000 {
+		t.Errorf("聚合速率 = %d, 期望 3000", agg.UpSpeed)
 	}
-	if agg.WindowBytes[client.FamilyIPv4] != 4000 {
-		t.Errorf("聚合周期量 = %d, 期望 4000", agg.WindowBytes[client.FamilyIPv4])
+	if agg.WindowBytes != 4000 {
+		t.Errorf("聚合周期量 = %d, 期望 4000", agg.WindowBytes)
 	}
 }
 
@@ -406,7 +359,7 @@ func TestAdoptStateFromPreservesCounters(t *testing.T) {
 	sc.set(rate, rate)
 	old.PollOnce(ctx, t0.Add(time.Second))
 
-	before := familyBytes(old, "c1", client.FamilyIPv4)
+	before := windowBytes(old, "c1")
 	if before != rate {
 		t.Fatalf("前置条件不成立: %d", before)
 	}
@@ -415,22 +368,19 @@ func TestAdoptStateFromPreservesCounters(t *testing.T) {
 	next := NewMonitor(reg, time.Second, 50)
 	next.AdoptStateFrom(old)
 
-	if got := familyBytes(next, "c1", client.FamilyIPv4); got != before {
+	if got := windowBytes(next, "c1"); got != before {
 		t.Errorf("迁移后周期累计 = %d, 期望 %d（热重载不应清零）", got, before)
 	}
 
 	// 继承后继续累计应正确衔接
 	sc.set(rate, 2*rate)
 	next.PollOnce(ctx, t0.Add(2*time.Second))
-	if got := familyBytes(next, "c1", client.FamilyIPv4); got != 2*rate {
+	if got := windowBytes(next, "c1"); got != 2*rate {
 		t.Errorf("迁移后继续累计 = %d, 期望 %d", got, 2*rate)
 	}
 }
 
 // TestConcurrentAccessIsRaceFree 验证并发采样与读取不会 panic 或数据竞争。
-//
-// 用 -race 运行能检出竞争；即便不带 -race，
-// 这个用例也能发现锁使用不当导致的崩溃。
 func TestConcurrentAccessIsRaceFree(t *testing.T) {
 	sc := &scriptedClient{name: "c1"}
 	reg := client.NewRegistry()

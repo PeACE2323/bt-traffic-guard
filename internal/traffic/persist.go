@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/btguard/bt-traffic-guard/internal/client"
 )
 
 // persistState 是落盘的最小状态。
@@ -29,7 +27,7 @@ type persistState struct {
 	// 客户端自身可能重启，其累计量会归零；
 	// 而「本周期已用多少」是本工具自己的语义，
 	// 直接存它，重启后原样恢复即可，不依赖客户端状态是否连续。
-	Accumulated map[string]map[client.Family]int64 `json:"accumulated"`
+	Accumulated map[string]int64 `json:"accumulated"`
 }
 
 // persister 负责状态的读写，带节流避免每轮都写盘。
@@ -137,40 +135,32 @@ func (m *Monitor) SetStatePath(path string, windowKey string) {
 
 	// NewMonitor 已为每个客户端预建计数器，正常情况下可直接套用；
 	// 未建好的暂存，等 ensureCounters 创建时补上。
-	for name, saved := range st.Accumulated {
-		fams, ok := m.counters[name]
+	for name, used := range st.Accumulated {
+		c, ok := m.counters[name]
 		if !ok {
 			if m.pendingAccum == nil {
-				m.pendingAccum = map[string]map[client.Family]int64{}
+				m.pendingAccum = map[string]int64{}
 			}
-			m.pendingAccum[name] = saved
+			m.pendingAccum[name] = used
 			continue
 		}
-		for fam, used := range saved {
-			if c, ok := fams[fam]; ok {
-				c.windowBytes = used
-				c.totalBytes = used
-			}
-		}
+		c.windowBytes = used
+		c.totalBytes = used
 	}
 }
 
 // applyPendingBaselineLocked 在计数器就绪后套用暂存的累计量。
 // 调用方必须持有 m.mu。返回是否应用了数据。
-func (m *Monitor) applyPendingBaselineLocked(name string, fams map[client.Family]*counter) bool {
+func (m *Monitor) applyPendingBaselineLocked(name string, c *counter) bool {
 	if len(m.pendingAccum) == 0 {
 		return false
 	}
-	saved, ok := m.pendingAccum[name]
+	used, ok := m.pendingAccum[name]
 	if !ok {
 		return false
 	}
-	for fam, used := range saved {
-		if c, ok := fams[fam]; ok {
-			c.windowBytes = used
-			c.totalBytes = used
-		}
-	}
+	c.windowBytes = used
+	c.totalBytes = used
 	delete(m.pendingAccum, name)
 	return true
 }
@@ -199,17 +189,11 @@ func (m *Monitor) snapshotForPersist(windowKey string) {
 		m.mu.Unlock()
 		return
 	}
-	baseline := make(map[string]map[client.Family]int64, len(m.counters))
-	for name, fams := range m.counters {
-		entry := make(map[client.Family]int64, len(fams))
-		for fam, c := range fams {
-			// 只记录本周期确实产生过流量的族。
-			if c.windowBytes > 0 {
-				entry[fam] = c.windowBytes
-			}
-		}
-		if len(entry) > 0 {
-			baseline[name] = entry
+	baseline := make(map[string]int64, len(m.counters))
+	for name, c := range m.counters {
+		// 只记录本周期确实产生过流量的客户端。
+		if c.windowBytes > 0 {
+			baseline[name] = c.windowBytes
 		}
 	}
 	m.mu.Unlock()
@@ -221,16 +205,10 @@ func (m *Monitor) snapshotForPersist(windowKey string) {
 func (m *Monitor) ForcePersist(windowKey string) {
 	m.mu.Lock()
 	p := m.persist
-	baseline := make(map[string]map[client.Family]int64, len(m.counters))
-	for name, fams := range m.counters {
-		entry := make(map[client.Family]int64, len(fams))
-		for fam, c := range fams {
-			if c.windowBytes > 0 {
-				entry[fam] = c.windowBytes
-			}
-		}
-		if len(entry) > 0 {
-			baseline[name] = entry
+	baseline := make(map[string]int64, len(m.counters))
+	for name, c := range m.counters {
+		if c.windowBytes > 0 {
+			baseline[name] = c.windowBytes
 		}
 	}
 	m.mu.Unlock()

@@ -40,8 +40,8 @@ func (f *fakeClient) Fetch(_ context.Context) (client.Stats, error) {
 	f.fetchCalls++
 	return client.Stats{
 		Timestamp: time.Now(),
-		UpSpeed:   map[client.Family]int64{client.FamilyIPv4: 1024},
-		UpTotal:   map[client.Family]int64{client.FamilyIPv4: f.upTotal},
+		UpSpeed:   1024,
+		UpTotal:   f.upTotal,
 		DlSpeed:   0,
 		// 上报当前生效的限速，供状态机做「限速是否被外部改动」的校验
 		CurrentUpLimit: f.upLimit,
@@ -275,29 +275,6 @@ func TestNoTriggerBelowThreshold(t *testing.T) {
 	}
 	if st := h.state(t); st.Limited {
 		t.Error("策略状态不应为 limited")
-	}
-}
-
-// TestFamilyThreshold 验证分族阈值只按对应地址族判断。
-func TestFamilyThreshold(t *testing.T) {
-	yes := true
-	pc := basePolicy()
-	pc.ThresholdTotal = 0
-	pc.ThresholdIPv6 = config.Bytes(1000) // 只判断 IPv6
-	pc.LimitTotal = config.Bitrate(0)
-	pc.LimitIPv6 = config.Bitrate(50)
-	pc.Enabled = &yes
-
-	h := newHarness(t, pc)
-
-	h.poll()
-	// 假客户端上报的是 IPv4 流量；IPv6 阈值不应被 IPv4 流量触发
-	h.cli.addBytes(5000)
-	h.poll()
-	h.evaluate()
-
-	if got := h.cli.limit(); got != 0 {
-		t.Errorf("IPv4 流量不应触发 IPv6 阈值，实际限速 = %d", got)
 	}
 }
 

@@ -24,7 +24,7 @@ import (
 // 计数器
 // ---------------------------------------------------------------------------
 
-// counter 跟踪单个 (客户端, 地址族) 的周期累计上传量。
+// counter 跟踪单个客户端的周期累计上传量。
 type counter struct {
 	// lastTotal 是上一次看到的客户端自报累计值。
 	lastTotal int64
@@ -54,8 +54,8 @@ func (c *counter) reset() {
 // Sample 是一条用于绘制曲线的采样点。
 type Sample struct {
 	Timestamp time.Time `json:"t"`
-	// UpSpeed 是各地址族的上传速度（字节/秒）。
-	UpSpeed map[client.Family]int64 `json:"up"`
+	// UpSpeed 是上传速度（字节/秒）。
+	UpSpeed int64 `json:"up"`
 	// DlSpeed 是下载速度（字节/秒）。
 	DlSpeed int64 `json:"dl"`
 	// WindowBytes 是该时刻所在周期的累计上传量。
@@ -66,39 +66,20 @@ type Sample struct {
 
 // ClientSnapshot 是单个客户端在某一时刻的完整视图。
 type ClientSnapshot struct {
-	Name                string                  `json:"name"`
-	Type                string                  `json:"type"`
-	URL                 string                  `json:"url"`
-	Healthy             bool                    `json:"healthy"`
-	LastError           string                  `json:"last_error,omitempty"`
-	LastSeen            time.Time               `json:"last_seen"`
-	UpSpeed             map[client.Family]int64 `json:"up_speed"`
-	UpTotal             map[client.Family]int64 `json:"up_total"`
-	WindowBytes         map[client.Family]int64 `json:"window_bytes"`
-	TotalBytes          map[client.Family]int64 `json:"total_bytes"`
-	DlSpeed             int64                   `json:"dl_speed"`
-	PeerCount           int                     `json:"peers"`
-	TorrentCount        int                     `json:"torrents"`
-	SupportsFamilyLimit bool                    `json:"supports_family_limit"`
-	CurrentUpLimit      int64                   `json:"current_up_limit"`
-}
-
-// TotalSpeed 返回该客户端所有地址族的上传速度合计。
-func (s ClientSnapshot) TotalSpeed() int64 {
-	var n int64
-	for _, v := range s.UpSpeed {
-		n += v
-	}
-	return n
-}
-
-// TotalWindow 返回该客户端周期累计上传量合计。
-func (s ClientSnapshot) TotalWindow() int64 {
-	var n int64
-	for _, v := range s.WindowBytes {
-		n += v
-	}
-	return n
+	Name           string    `json:"name"`
+	Type           string    `json:"type"`
+	URL            string    `json:"url"`
+	Healthy        bool      `json:"healthy"`
+	LastError      string    `json:"last_error,omitempty"`
+	LastSeen       time.Time `json:"last_seen"`
+	UpSpeed        int64     `json:"up_speed"`
+	UpTotal        int64     `json:"up_total"`
+	WindowBytes    int64     `json:"window_bytes"`
+	TotalBytes     int64     `json:"total_bytes"`
+	DlSpeed        int64     `json:"dl_speed"`
+	PeerCount      int       `json:"peers"`
+	TorrentCount   int       `json:"torrents"`
+	CurrentUpLimit int64     `json:"current_up_limit"`
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +92,8 @@ type Monitor struct {
 	interval time.Duration
 
 	mu sync.RWMutex
-	// counters[clientName][family]
-	counters map[string]map[client.Family]*counter
+	// counters[clientName]
+	counters map[string]*counter
 	// snapshots 是各客户端最近一次的完整快照。
 	snapshots map[string]ClientSnapshot
 	// history 是各客户端的实时曲线（环形缓冲）。
@@ -129,7 +110,7 @@ type Monitor struct {
 	windowKey string
 	// pendingAccum 暂存从磁盘恢复的「本周期已累计字节数」。
 	// 启动时 counters 尚未建立，必须等首轮采样创建计数器后再套用。
-	pendingAccum map[string]map[client.Family]int64
+	pendingAccum map[string]int64
 }
 
 // NewMonitor 创建监控器。
@@ -143,7 +124,7 @@ func NewMonitor(reg *client.Registry, interval time.Duration, historyCap int) *M
 	m := &Monitor{
 		registry:   reg,
 		interval:   interval,
-		counters:   map[string]map[client.Family]*counter{},
+		counters:   map[string]*counter{},
 		snapshots:  map[string]ClientSnapshot{},
 		history:    map[string][]Sample{},
 		historyCap: historyCap,
@@ -155,21 +136,18 @@ func NewMonitor(reg *client.Registry, interval time.Duration, historyCap int) *M
 	return m
 }
 
-// ensureCounters 为指定客户端准备好各地址族的计数器。调用方需持有写锁。
-func (m *Monitor) ensureCounters(name string) map[client.Family]*counter {
-	fams, ok := m.counters[name]
+// ensureCounters 为指定客户端准备好计数器。调用方需持有写锁。
+func (m *Monitor) ensureCounters(name string) *counter {
+	c, ok := m.counters[name]
 	if !ok {
-		fams = map[client.Family]*counter{}
-		for _, f := range client.Families() {
-			fams[f] = &counter{}
-		}
-		m.counters[name] = fams
-		// 若这个客户端有从磁盘恢复的周期基线，就在这里套用。
+		c = &counter{}
+		m.counters[name] = c
+		// 若这个客户端有从磁盘恢复的周期累计，就在这里套用。
 		// 必须等到计数器创建之后 —— 启动阶段 counters 还是空的，
 		// 那时直接写入会被静默丢弃，导致重启后周期累计从 0 重新开始。
-		m.applyPendingBaselineLocked(name, fams)
+		m.applyPendingBaselineLocked(name, c)
 	}
-	return fams
+	return c
 }
 
 // Interval 返回采样间隔。
@@ -203,7 +181,7 @@ func (m *Monitor) PollOnce(ctx context.Context, now time.Time) {
 
 	for _, r := range results {
 		name := r.client.Name()
-		fams := m.ensureCounters(name)
+		cnt := m.ensureCounters(name)
 
 		if r.err != nil {
 			m.pollErrors++
@@ -217,9 +195,9 @@ func (m *Monitor) PollOnce(ctx context.Context, now time.Time) {
 			m.snapshots[name] = snap
 			m.appendHistoryLocked(name, Sample{
 				Timestamp:   now,
-				UpSpeed:     copyFamilyMap(snap.UpSpeed),
+				UpSpeed:     snap.UpSpeed,
 				DlSpeed:     snap.DlSpeed,
-				WindowBytes: snap.TotalWindow(),
+				WindowBytes: snap.WindowBytes,
 			})
 			continue
 		}
@@ -227,59 +205,32 @@ func (m *Monitor) PollOnce(ctx context.Context, now time.Time) {
 		st := r.stats
 		st.Timestamp = now
 
-		// 更新每个地址族的累计量。
-		window := map[client.Family]int64{}
-		total := map[client.Family]int64{}
-		for _, fam := range client.Families() {
-			cnt := fams[fam]
-			speed := st.UpSpeed[fam]
-			cum := st.UpTotal[fam]
-
-			if !cnt.hasBaseline {
-				// 首次采样：只建立基线，不计入本周期。
-				cnt.hasBaseline = true
-				cnt.lastTotal = cum
-				cnt.lastSpeed = speed
-				cnt.lastSeen = now
-				window[fam] = cnt.windowBytes
-				total[fam] = cnt.totalBytes
-				continue
-			}
-
+		if !cnt.hasBaseline {
+			// 首次采样：只建立基线，不计入本周期。
+			cnt.hasBaseline = true
+			cnt.lastTotal = st.UpTotal
+			cnt.lastSpeed = st.UpSpeed
+			cnt.lastSeen = now
+		} else {
 			delta := int64(0)
 			switch {
-			case st.FamilyTotalEstimated:
-				// 分族量是估算值（例如 Transmission 按 peer 占比分摊），
-				// 会随 peer 增减上下跳动，【不是单调计数器】。
-				//
-				// 若沿用「累计量差值」会出大问题：
-				//   某族数值被稀释变小 -> 误判为客户端重启
-				//   -> 下一轮数值回升 -> 把整段差值当成新增流量
-				// 实测每次 peer 波动可灌入数百 GB 虚假流量。
-				//
-				// 因此这类客户端一律用速率积分，虽然精度略低，
-				// 但绝不会产生数量级上的错误。
-				delta = integrate(cnt.lastSpeed, speed, now.Sub(cnt.lastSeen))
-			case cum > 0:
-				if cum >= cnt.lastTotal {
-					// 正常情况：用自报累计量的差值，精确且不受采样抖动影响。
-					delta = cum - cnt.lastTotal
+			case st.UpTotal > 0:
+				if st.UpTotal >= cnt.lastTotal {
+					// 正常情况：用客户端自报累计量的差值，精确且不受采样抖动影响。
+					delta = st.UpTotal - cnt.lastTotal
 				} else {
 					// 客户端重启：累计量归零，改用速率积分补上这一段。
-					delta = integrate(cnt.lastSpeed, speed, now.Sub(cnt.lastSeen))
+					delta = integrate(cnt.lastSpeed, st.UpSpeed, now.Sub(cnt.lastSeen))
 					cnt.resets++
 				}
-				cnt.lastTotal = cum
+				cnt.lastTotal = st.UpTotal
 			default:
 				// 客户端不提供累计量：只能速率积分。
-				delta = integrate(cnt.lastSpeed, speed, now.Sub(cnt.lastSeen))
-			}
-			if !st.FamilyTotalEstimated {
-				cnt.lastTotal = cum
+				delta = integrate(cnt.lastSpeed, st.UpSpeed, now.Sub(cnt.lastSeen))
 			}
 
 			// 防御：单次采样增量不可能超过「峰值速率 × 间隔」的合理上限。
-			if maxDelta := maxInt64(cnt.lastSpeed, speed) * int64(now.Sub(cnt.lastSeen).Seconds()+1) * 2; maxDelta > 0 && delta > maxDelta {
+			if maxDelta := maxInt64(cnt.lastSpeed, st.UpSpeed) * int64(now.Sub(cnt.lastSeen).Seconds()+1) * 2; maxDelta > 0 && delta > maxDelta {
 				delta = maxDelta
 			}
 			if delta < 0 {
@@ -288,40 +239,31 @@ func (m *Monitor) PollOnce(ctx context.Context, now time.Time) {
 
 			cnt.windowBytes += delta
 			cnt.totalBytes += delta
-			cnt.lastSpeed = speed
+			cnt.lastSpeed = st.UpSpeed
 			cnt.lastSeen = now
-
-			window[fam] = cnt.windowBytes
-			total[fam] = cnt.totalBytes
-		}
-
-		var totalWindow int64
-		for _, v := range window {
-			totalWindow += v
 		}
 
 		m.snapshots[name] = ClientSnapshot{
-			Name:                name,
-			Type:                r.client.Type(),
-			URL:                 clientURL(r.client),
-			Healthy:             true,
-			LastSeen:            now,
-			UpSpeed:             copyFamilyMap(st.UpSpeed),
-			UpTotal:             copyFamilyMap(st.UpTotal),
-			WindowBytes:         window,
-			TotalBytes:          total,
-			DlSpeed:             st.DlSpeed,
-			PeerCount:           st.PeerCount,
-			TorrentCount:        st.TorrentCount,
-			SupportsFamilyLimit: st.SupportsFamilyLimit,
-			CurrentUpLimit:      st.CurrentUpLimit,
+			Name:           name,
+			Type:           r.client.Type(),
+			URL:            clientURL(r.client),
+			Healthy:        true,
+			LastSeen:       now,
+			UpSpeed:        st.UpSpeed,
+			UpTotal:        st.UpTotal,
+			WindowBytes:    cnt.windowBytes,
+			TotalBytes:     cnt.totalBytes,
+			DlSpeed:        st.DlSpeed,
+			PeerCount:      st.PeerCount,
+			TorrentCount:   st.TorrentCount,
+			CurrentUpLimit: st.CurrentUpLimit,
 		}
 
 		m.appendHistoryLocked(name, Sample{
 			Timestamp:   now,
-			UpSpeed:     copyFamilyMap(st.UpSpeed),
+			UpSpeed:     st.UpSpeed,
 			DlSpeed:     st.DlSpeed,
-			WindowBytes: totalWindow,
+			WindowBytes: cnt.windowBytes,
 		})
 	}
 
@@ -344,24 +286,18 @@ func (m *Monitor) Aggregate() ClientSnapshot {
 	defer m.mu.RUnlock()
 
 	agg := ClientSnapshot{
-		Name:        "__all__",
-		Type:        "aggregate",
-		UpSpeed:     map[client.Family]int64{},
-		UpTotal:     map[client.Family]int64{},
-		WindowBytes: map[client.Family]int64{},
-		TotalBytes:  map[client.Family]int64{},
-		Healthy:     true,
+		Name:    "__all__",
+		Type:    "aggregate",
+		Healthy: true,
 	}
 	for _, snap := range m.snapshots {
 		if !snap.Healthy {
 			agg.Healthy = false
 		}
-		for _, f := range client.Families() {
-			agg.UpSpeed[f] += snap.UpSpeed[f]
-			agg.UpTotal[f] += snap.UpTotal[f]
-			agg.WindowBytes[f] += snap.WindowBytes[f]
-			agg.TotalBytes[f] += snap.TotalBytes[f]
-		}
+		agg.UpSpeed += snap.UpSpeed
+		agg.UpTotal += snap.UpTotal
+		agg.WindowBytes += snap.WindowBytes
+		agg.TotalBytes += snap.TotalBytes
 		agg.DlSpeed += snap.DlSpeed
 		agg.PeerCount += snap.PeerCount
 		agg.TorrentCount += snap.TorrentCount
@@ -387,13 +323,9 @@ func (m *Monitor) AllSnapshots() []ClientSnapshot {
 			out = append(out, s)
 		} else {
 			out = append(out, ClientSnapshot{
-				Name:        c.Name(),
-				Type:        c.Type(),
-				Healthy:     false,
-				UpSpeed:     map[client.Family]int64{},
-				UpTotal:     map[client.Family]int64{},
-				WindowBytes: map[client.Family]int64{},
-				TotalBytes:  map[client.Family]int64{},
+				Name:    c.Name(),
+				Type:    c.Type(),
+				Healthy: false,
 			})
 		}
 	}
@@ -426,11 +358,7 @@ func (m *Monitor) History(name string) []Sample {
 				merged[key] = a
 				order = append(order, key)
 			}
-			var up int64
-			for _, v := range s.UpSpeed {
-				up += v
-			}
-			a.up += up
+			a.up += s.UpSpeed
 			a.dl += s.DlSpeed
 			a.win += s.WindowBytes
 		}
@@ -446,7 +374,7 @@ func (m *Monitor) History(name string) []Sample {
 		a := merged[k]
 		out = append(out, Sample{
 			Timestamp:   time.Unix(k, 0),
-			UpSpeed:     map[client.Family]int64{client.FamilyUnknown: a.up},
+			UpSpeed:     a.up,
 			DlSpeed:     a.dl,
 			WindowBytes: a.win,
 		})
@@ -471,14 +399,10 @@ func (m *Monitor) AdoptStateFrom(old *Monitor) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for name, fams := range oldCounters {
+	for name, c := range oldCounters {
 		dst := m.ensureCounters(name)
-		for fam, c := range fams {
-			if d, ok := dst[fam]; ok {
-				// 复制值而非指针，避免两个监控器共享同一计数器。
-				*d = *c
-			}
-		}
+		// 复制值而非指针，避免两个监控器共享同一计数器。
+		*dst = *c
 	}
 	// 保留已有快照（视图连续性），但用旧数据补齐本次没有采到的客户端。
 	for name, snap := range oldSnapshots {
@@ -506,46 +430,25 @@ func (m *Monitor) ResetWindow(names []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	resetOne := func(name string, fams map[client.Family]*counter) {
-		for _, c := range fams {
+	resetOne := func(name string) {
+		if c, ok := m.counters[name]; ok {
 			c.reset()
 		}
 		// 同步刷新快照，避免引擎读到过期值
 		if snap, ok := m.snapshots[name]; ok {
-			clear := make(map[client.Family]int64, len(snap.WindowBytes))
-			for f := range snap.WindowBytes {
-				clear[f] = 0
-			}
-			snap.WindowBytes = clear
+			snap.WindowBytes = 0
 			m.snapshots[name] = snap
 		}
 	}
 
 	if len(names) == 0 {
-		for name, fams := range m.counters {
-			resetOne(name, fams)
+		for name := range m.counters {
+			resetOne(name)
 		}
 		return
 	}
 	for _, n := range names {
-		if fams, ok := m.counters[n]; ok {
-			resetOne(n, fams)
-		}
-	}
-}
-
-// ResetWindowFamilies 只重置指定地址族的周期累计。
-func (m *Monitor) ResetWindowFamilies(name string, fams []client.Family) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	counters, ok := m.counters[name]
-	if !ok {
-		return
-	}
-	for _, f := range fams {
-		if c, ok := counters[f]; ok {
-			c.reset()
-		}
+		resetOne(n)
 	}
 }
 
@@ -619,27 +522,19 @@ func (m *Monitor) Diagnostics() map[string]any {
 	}
 
 	per := map[string]any{}
-	for name, fams := range m.counters {
-		entry := map[string]any{}
-		var winSum, totSum int64
-		for fam, c := range fams {
-			entry[string(fam)] = map[string]any{
-				"window_bytes": c.windowBytes,
-				"total_bytes":  c.totalBytes,
-				"last_total":   c.lastTotal,
-				"last_speed":   c.lastSpeed,
-				"has_baseline": c.hasBaseline,
-				"resets":       c.resets,
-			}
-			winSum += c.windowBytes
-			totSum += c.totalBytes
+	for name, c := range m.counters {
+		entry := map[string]any{
+			"window_bytes": c.windowBytes,
+			"total_bytes":  c.totalBytes,
+			"last_total":   c.lastTotal,
+			"last_speed":   c.lastSpeed,
+			"has_baseline": c.hasBaseline,
+			"resets":       c.resets,
 		}
-		entry["window_sum"] = winSum
-		entry["total_sum"] = totSum
-		// 快照里的值（界面直接读这个）
+		// 快照里的值（界面直接读这个），应与上面一致
 		if snap, ok := m.snapshots[name]; ok {
-			entry["snapshot_window"] = snap.TotalWindow()
-			entry["snapshot_up_speed"] = snap.TotalSpeed()
+			entry["snapshot_window"] = snap.WindowBytes
+			entry["snapshot_up_speed"] = snap.UpSpeed
 		}
 		per[name] = entry
 	}
@@ -664,15 +559,6 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
-}
-
-// copyFamilyMap 复制一个地址族映射，避免共享底层 map。
-func copyFamilyMap(in map[client.Family]int64) map[client.Family]int64 {
-	out := make(map[client.Family]int64, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
 }
 
 // clientURL 返回客户端的地址（从 Managed 中取不到时返回空串）。

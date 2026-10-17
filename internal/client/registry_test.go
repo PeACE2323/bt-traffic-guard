@@ -34,8 +34,8 @@ func newToggleClient(name, typ string) *toggleClient {
 		url:  "http://" + name + ":8080",
 		stats: Stats{
 			Timestamp: time.Now(),
-			UpSpeed:   map[Family]int64{FamilyIPv4: 1024},
-			UpTotal:   map[Family]int64{FamilyIPv4: 4096},
+			UpSpeed:   1024,
+			UpTotal:   4096,
 		},
 	}
 }
@@ -469,28 +469,6 @@ func TestNewAPIKeyOnlyAffectsQBittorrent(t *testing.T) {
 // 辅助逻辑
 // ---------------------------------------------------------------------------
 
-// TestFamilies 验证地址族列表稳定且完整。
-func TestFamilies(t *testing.T) {
-	fams := Families()
-	if len(fams) != 3 {
-		t.Fatalf("应有 3 个地址族，实际 %d", len(fams))
-	}
-	want := map[Family]bool{FamilyIPv4: true, FamilyIPv6: true, FamilyUnknown: true}
-	for _, f := range fams {
-		if !want[f] {
-			t.Errorf("意外的地址族: %q", f)
-		}
-	}
-	// 顺序应稳定（多次调用结果一致）
-	again := Families()
-	for i := range fams {
-		if fams[i] != again[i] {
-			t.Error("Families() 的返回顺序应稳定")
-			break
-		}
-	}
-}
-
 // TestStatusErrorIncludesSnippet 验证错误信息带响应片段。
 //
 // 排查问题时，光知道「HTTP 403」往往不够，
@@ -578,12 +556,12 @@ func TestLimitTrackerConcurrent(t *testing.T) {
 // TestLimitConstructors 验证限速指令的构造。
 func TestLimitConstructors(t *testing.T) {
 	noop := NewNoopLimit()
-	if noop.Total != -1 || noop.IPv4 != -1 || noop.IPv6 != -1 {
+	if noop.Total != -1 {
 		t.Errorf("NewNoopLimit 应全部为 -1（表示不修改），实际 %+v", noop)
 	}
 
 	unlim := NewUnlimited()
-	if unlim.Total != 0 || unlim.IPv4 != 0 || unlim.IPv6 != 0 {
+	if unlim.Total != 0 {
 		t.Errorf("NewUnlimited 应全部为 0（表示不限速），实际 %+v", unlim)
 	}
 }

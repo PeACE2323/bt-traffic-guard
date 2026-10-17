@@ -346,21 +346,14 @@ func TestInt64AndStringAccessors(t *testing.T) {
 func TestPolicyAccessors(t *testing.T) {
 	p := PolicyConfig{
 		ThresholdTotal: Bytes(1000),
-		ThresholdIPv4:  Bytes(2000),
-		ThresholdIPv6:  Bytes(3000),
 		LimitTotal:     Bitrate(100),
-		LimitIPv4:      Bitrate(200),
-		LimitIPv6:      Bitrate(300),
 	}
 
-	if p.ThTotal() != 1000 || p.ThIPv4() != 2000 || p.ThIPv6() != 3000 {
-		t.Errorf("阈值访问器错误: %d/%d/%d", p.ThTotal(), p.ThIPv4(), p.ThIPv6())
+	if p.ThTotal() != 1000 {
+		t.Errorf("ThTotal() = %d, 期望 1000", p.ThTotal())
 	}
-	if p.LimTotal() != 100 || p.LimIPv4() != 200 || p.LimIPv6() != 300 {
-		t.Errorf("限速访问器错误: %d/%d/%d", p.LimTotal(), p.LimIPv4(), p.LimIPv6())
-	}
-	if !p.UsesFamilyLimit() {
-		t.Error("配置了分族限速时 UsesFamilyLimit 应为 true")
+	if p.LimTotal() != 100 {
+		t.Errorf("LimTotal() = %d, 期望 100", p.LimTotal())
 	}
 	if !p.HasThreshold() {
 		t.Error("配置了阈值时 HasThreshold 应为 true")
@@ -368,9 +361,6 @@ func TestPolicyAccessors(t *testing.T) {
 
 	// 全零的边界情况
 	zero := PolicyConfig{}
-	if zero.UsesFamilyLimit() {
-		t.Error("未配置分族限速时 UsesFamilyLimit 应为 false")
-	}
 	if zero.HasThreshold() {
 		t.Error("未配置阈值时 HasThreshold 应为 false")
 	}

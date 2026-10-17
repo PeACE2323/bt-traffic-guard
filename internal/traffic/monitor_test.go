@@ -72,16 +72,17 @@ func TestFormatSpeed(t *testing.T) {
 	}
 }
 
-func TestClientSnapshotTotals(t *testing.T) {
+// TestSnapshotFields 验证快照的字段语义（现在只有单一总量）。
+func TestSnapshotFields(t *testing.T) {
 	s := ClientSnapshot{
-		UpSpeed:     map[client.Family]int64{client.FamilyIPv4: 10, client.FamilyIPv6: 20},
-		WindowBytes: map[client.Family]int64{client.FamilyIPv4: 100, client.FamilyIPv6: 250},
+		UpSpeed:     30,
+		WindowBytes: 350,
 	}
-	if got := s.TotalSpeed(); got != 30 {
-		t.Errorf("TotalSpeed() = %d, 期望 30", got)
+	if s.UpSpeed != 30 {
+		t.Errorf("UpSpeed = %d, 期望 30", s.UpSpeed)
 	}
-	if got := s.TotalWindow(); got != 350 {
-		t.Errorf("TotalWindow() = %d, 期望 350", got)
+	if s.WindowBytes != 350 {
+		t.Errorf("WindowBytes = %d, 期望 350", s.WindowBytes)
 	}
 }
 
@@ -117,11 +118,7 @@ func (f *fakeClient) Name() string { return f.name }
 func (f *fakeClient) Type() string { return "fake" }
 
 func (f *fakeClient) Fetch(_ context.Context) (client.Stats, error) {
-	return client.Stats{
-		Timestamp: time.Now(),
-		UpSpeed:   map[client.Family]int64{},
-		UpTotal:   map[client.Family]int64{},
-	}, nil
+	return client.Stats{Timestamp: time.Now()}, nil
 }
 
 func (f *fakeClient) SetUploadLimit(_ context.Context, _ client.SpeedLimit) error { return nil }

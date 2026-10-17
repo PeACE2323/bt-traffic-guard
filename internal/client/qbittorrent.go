@@ -29,7 +29,7 @@ import (
 // 读取每个种子的连接数与已连接 peer 信息，按 peer 地址推断族。
 // 若接口未提供足够信息（多数版本如此），则退化为：
 //   - 若配置中只关心一个族，把全部流量归到该族；
-//   - 否则归入 unknown，并在 stats 中标记 SupportsFamilyLimit=false。
+//   - 注：v1.1 起不再区分地址族，只统计总上传量。
 //
 // 同时，qBittorrent 4.6+ 支持 preferences 中的分族限速（ipv4/ipv6 上传限速），
 // 本实现会在可用时通过 /api/v2/app/setPreferences 下发分族限速。
@@ -50,14 +50,9 @@ type QBittorrent struct {
 	lastAuth time.Time
 
 	// 连接信息缓存
-	verMtx      sync.Mutex
-	version     string
-	versionAt   time.Time
-	hasFamLimit bool
-
-	// peer 族分布缓存（由 /api/v2/sync/maindata 或 torrents/info 推断）
-	peerFamilyMtx sync.Mutex
-	peerSamples   map[Family]int64
+	verMtx    sync.Mutex
+	version   string
+	versionAt time.Time
 
 	tracker limitTracker
 }
@@ -75,10 +70,9 @@ func NewQBittorrent(opt Options) *QBittorrent {
 		doer.bearer = apiKey
 	}
 	return &QBittorrent{
-		name:        opt.Name,
-		doer:        doer,
-		apiKey:      apiKey,
-		peerSamples: map[Family]int64{},
+		name:   opt.Name,
+		doer:   doer,
+		apiKey: apiKey,
 	}
 }
 
@@ -246,18 +240,8 @@ func (q *QBittorrent) detectVersion(ctx context.Context) string {
 	q.verMtx.Lock()
 	q.version = v
 	q.versionAt = time.Now()
-	q.hasFamLimit = versionAtLeast(v, 4, 6, 0)
 	q.verMtx.Unlock()
 	return v
-}
-
-// supportsFamilyLimit 返回该版本是否支持分族上传限速。
-func (q *QBittorrent) supportsFamilyLimit(ctx context.Context) bool {
-	v := q.detectVersion(ctx)
-	if v == "" {
-		return false
-	}
-	return versionAtLeast(v, 4, 6, 0)
 }
 
 // CheckAuthOnStartup 在启动阶段做一次认证能力自检，返回可供日志输出的提示。
@@ -327,102 +311,6 @@ type transferInfo struct {
 	DlRateLimit      int64  `json:"dl_rate_limit"`
 	ConnectionStatus string `json:"connection_status"`
 	GlobalRatio      any    `json:"global_ratio"`
-}
-
-// torrentPeerFamilies 通过 /api/v2/torrents/peers 统计各地址族的连接数。
-//
-// 为什么需要这个额外的请求：
-// sync/maindata 的 peers 字段并不可靠 —— 它只包含「最近有活动」
-// 且仍驻留内存的种子的 peer 明细，大量保种但空闲时该字段常常缺失。
-// 一旦缺失，调用方就会把全部流量判为「未分类」，
-// 用户看到的现象就是「永远分不出 IPv4/IPv6」。
-//
-// torrents/peers 是 qBittorrent 专门用于查询某种子 peer 列表的接口，
-// 数据完整、稳定，代价是需要按种子逐个查询。
-// 为控制开销，只取上传速率最高的若干个种子（活跃种子才有上传流量）。
-//
-// 返回 (v4 连接数, v6 连接数)。任一环节失败都返回 0,0，由调用方决定降级策略。
-func (q *QBittorrent) torrentPeerFamilies(ctx context.Context, mdOK bool, md *mainData) (int64, int64) {
-	// 先确定要查哪些种子：优先用 maindata 里的种子列表按上传速率排序。
-	var hashes []string
-	if mdOK {
-		type tstruct struct {
-			hash string
-			up   int64
-		}
-		var list []tstruct
-		for h, t := range md.Torrents {
-			list = append(list, tstruct{hash: h, up: t.UpSpeed})
-		}
-		// 简单的选择排序：只关心前 N 个，规模很小
-		const maxTorrents = 25
-		for i := 0; i < len(list) && i < maxTorrents; i++ {
-			best := i
-			for j := i + 1; j < len(list); j++ {
-				if list[j].up > list[best].up {
-					best = j
-				}
-			}
-			list[i], list[best] = list[best], list[i]
-			if list[i].up > 0 {
-				hashes = append(hashes, list[i].hash)
-			}
-		}
-		// 若全部空闲（up 都是 0），仍然挑前若干个查询 ——
-		// 空闲时也需要知道 peer 的地址族构成。
-		if len(hashes) == 0 {
-			for i := 0; i < len(list) && i < maxTorrents; i++ {
-				hashes = append(hashes, list[i].hash)
-			}
-		}
-	}
-
-	// maindata 不可用时，退化为查询全部种子（限量）。
-	if len(hashes) == 0 {
-		data, err := q.apiGet(ctx, "/api/v2/torrents/info")
-		if err != nil {
-			return 0, 0
-		}
-		var infos []struct {
-			Hash string `json:"hash"`
-		}
-		if err := json.Unmarshal(data, &infos); err != nil {
-			return 0, 0
-		}
-		for i, t := range infos {
-			if i >= 25 {
-				break
-			}
-			hashes = append(hashes, t.Hash)
-		}
-	}
-
-	var v4, v6 int64
-	for _, h := range hashes {
-		data, err := q.apiGet(ctx, "/api/v2/torrents/peers?hash="+url.QueryEscape(h))
-		if err != nil {
-			continue
-		}
-		var peers map[string]struct {
-			IP string `json:"ip"`
-		}
-		if err := json.Unmarshal(data, &peers); err != nil {
-			continue
-		}
-		for k, p := range peers {
-			addr := p.IP
-			if addr == "" {
-				addr = k
-			}
-			switch classifyIP(addr) {
-			case FamilyIPv4:
-				v4++
-			case FamilyIPv6:
-				v6++
-			}
-		}
-	}
-	return v4, v6
 }
 
 // mainData 是 /api/v2/sync/maindata 的响应子集。
@@ -499,196 +387,30 @@ func (q *QBittorrent) Fetch(ctx context.Context) (Stats, error) {
 	}
 
 	st := Stats{
-		Timestamp:           time.Now(),
-		UpSpeed:             map[Family]int64{},
-		UpTotal:             map[Family]int64{},
-		DlSpeed:             dlSpeed,
-		PeerCount:           md.ServerState.TotalPeerConn,
-		TorrentCount:        len(md.Torrents),
-		SpeedLimited:        upLimit > 0,
-		CurrentUpLimit:      upLimit,
-		SupportsFamilyLimit: q.supportsFamilyLimit(ctx),
-		Raw:                 map[string]any{"version": q.detectVersion(ctx)},
-	}
-
-	// 按地址族拆分。
-	v4, v6, unknown := q.splitByFamily(mdOK, &md, upSpeed, upData)
-
-	// 若 maindata 没给出可用的 peer 明细（大量保种空闲时很常见），
-	// 改用 torrents/peers 逐种子查询 —— 这是唯一可靠的分族来源。
-	//
-	// 没有这一步时，用户会看到「流量永远是未分类」：
-	// sync/maindata 的 peers 字段只覆盖最近活跃的种子，
-	// 保种场景下经常为空，于是全部流量被归为 unknown。
-	if v4.speed == 0 && v6.speed == 0 && upSpeed > 0 {
-		if c4, c6 := q.torrentPeerFamilies(ctx, mdOK, &md); c4+c6 > 0 {
-			sum := c4 + c6
-			v4.speed = upSpeed * c4 / sum
-			v6.speed = upSpeed - v4.speed
-			v4.total = upData * c4 / sum
-			v6.total = upData - v4.total
-			unknown = familySplit{}
-		}
-	}
-
-	st.UpSpeed[FamilyIPv4] = v4.speed
-	st.UpTotal[FamilyIPv4] = v4.total
-	st.UpSpeed[FamilyIPv6] = v6.speed
-	st.UpTotal[FamilyIPv6] = v6.total
-	if unknown.speed > 0 || unknown.total > 0 {
-		st.UpSpeed[FamilyUnknown] = unknown.speed
-		st.UpTotal[FamilyUnknown] = unknown.total
-	}
-
-	// 兜底：若三者全为 0 但总速度不为 0，说明归因失败，全部计入 unknown。
-	if st.UpSpeed[FamilyIPv4]+st.UpSpeed[FamilyIPv6]+st.UpSpeed[FamilyUnknown] == 0 && upSpeed > 0 {
-		st.UpSpeed[FamilyUnknown] = upSpeed
-		st.UpTotal[FamilyUnknown] = upData
-	}
-	// 累计量兜底
-	if st.UpTotal[FamilyIPv4]+st.UpTotal[FamilyIPv6]+st.UpTotal[FamilyUnknown] == 0 && upData > 0 {
-		st.UpTotal[FamilyUnknown] = upData
+		Timestamp:      time.Now(),
+		UpSpeed:        upSpeed,
+		UpTotal:        upData,
+		DlSpeed:        dlSpeed,
+		PeerCount:      md.ServerState.TotalPeerConn,
+		TorrentCount:   len(md.Torrents),
+		SpeedLimited:   upLimit > 0,
+		CurrentUpLimit: upLimit,
+		Raw:            map[string]any{"version": q.detectVersion(ctx)},
 	}
 
 	return st, nil
-}
-
-// familySplit 是某一地址族的流量。
-type familySplit struct {
-	speed int64
-	total int64
-}
-
-// splitByFamily 尝试按 peer 的 IP 地址把上传速度拆分到 v4 / v6。
-//
-// 说明：qBittorrent 的 maindata.peers 只在部分版本与配置下返回，
-// 且提供的是瞬时速率而非累计量。因此：
-//   - 速度：按 peer 的 up_speed 直接归属地址族，剩余部分计入 unknown；
-//   - 累计量：API 不提供分族累计，按当前速度占比对 up_data 做比例分摊。
-func (q *QBittorrent) splitByFamily(mdOK bool, md *mainData, totalSpeed, totalData int64) (familySplit, familySplit, familySplit) {
-	var v4, v6 familySplit
-	if !mdOK || len(md.Peers) == 0 {
-		// 无法归因：全部记为 unknown，由上层按单族配置决定如何处置。
-		return v4, v6, familySplit{speed: totalSpeed, total: totalData}
-	}
-
-	// 同时统计两件事：
-	//   sumV4/sumV6  —— 各族的【瞬时上传速率】
-	//   cntV4/cntV6  —— 各族的【peer 连接数】
-	//
-	// 为什么要统计连接数：PT 保种时大部分时间是空闲的，
-	// 所有 peer 的 up_speed 都是 0。若只按速率归因，
-	// 这些 peer 会被全部跳过，结果永远退回「全部未分类」——
-	// 用户看到的就是「分不出 IPv4/IPv6」。
-	// 因此在速率为 0 时改用【连接数占比】来分摊。
-	var sumV4, sumV6 int64
-	var cntV4, cntV6 int64
-	for _, peerSet := range md.Peers {
-		for ip, p := range peerSet {
-			addr := p.IP
-			if addr == "" {
-				addr = ip
-			}
-			switch classifyIP(addr) {
-			case FamilyIPv4:
-				cntV4++
-				if p.UpSpeed > 0 {
-					sumV4 += p.UpSpeed
-				}
-			case FamilyIPv6:
-				cntV6++
-				if p.UpSpeed > 0 {
-					sumV6 += p.UpSpeed
-				}
-			}
-		}
-	}
-
-	// 真实速率合计为零（空闲保种）时，按 peer 连接数分摊总量，
-	// 这样至少能给出「这个下载器当前主要走 v4 还是 v6」的正确归属。
-	if sumV4+sumV6 <= 0 {
-		if cntV4+cntV6 <= 0 {
-			return v4, v6, familySplit{speed: totalSpeed, total: totalData}
-		}
-		cnt := cntV4 + cntV6
-		v4.speed = totalSpeed * cntV4 / cnt
-		v6.speed = totalSpeed - v4.speed
-		v4.total = totalData * cntV4 / cnt
-		v6.total = totalData - v4.total
-		return v4, v6, familySplit{}
-	}
-
-	total := sumV4 + sumV6
-	if total <= 0 {
-		return v4, v6, familySplit{speed: totalSpeed, total: totalData}
-	}
-
-	// 速度：以 peer 明细为准，剩余部分（tracker/DHT 开销等）按比例分摊。
-	v4.speed = sumV4
-	v6.speed = sumV6
-	if total < totalSpeed {
-		rest := totalSpeed - total
-		v4.speed += rest * sumV4 / total
-		v6.speed += rest * sumV6 / total
-	}
-	// 累计量：按速度占比分摊总量。
-	v4.total = totalData * sumV4 / total
-	v6.total = totalData * sumV6 / total
-
-	return v4, v6, familySplit{}
 }
 
 // ---------------------------------------------------------------------------
 // 限速
 // ---------------------------------------------------------------------------
 
-// SetUploadLimit 下发上传限速。
-//
-// 优先使用 qBittorrent 4.6+ 的分族限速（app/setPreferences 的
-// up_limit_ipv4 / up_limit_ipv6），否则回落到全局 transfer/setUploadLimit。
+// SetUploadLimit 下发全局上传限速。
 func (q *QBittorrent) SetUploadLimit(ctx context.Context, limit SpeedLimit) error {
-	useFamily := limit.UseFamily && q.supportsFamilyLimit(ctx) &&
-		(limit.IPv4 >= 0 || limit.IPv6 >= 0)
-
-	if useFamily {
-		// 构造 preferences JSON，只下发分族上传限速。
-		prefs := map[string]any{}
-		if limit.IPv4 >= 0 {
-			prefs["up_limit_ipv4"] = limit.IPv4
-		}
-		if limit.IPv6 >= 0 {
-			prefs["up_limit_ipv6"] = limit.IPv6
-		}
-		if len(prefs) > 0 {
-			blob, err := json.Marshal(prefs)
-			if err != nil {
-				return fmt.Errorf("序列化 qBittorrent preferences 失败: %w", err)
-			}
-			form := url.Values{}
-			form.Set("json", string(blob))
-			if _, err := q.apiPost(ctx, "/api/v2/app/setPreferences", form); err == nil {
-				q.tracker.record(limit)
-				return nil
-			}
-			// 失败则回落全局限速，不让策略静默失效。
-		}
-	}
-
-	// 全局限速：需要一个单一数值。
 	value := limit.Total
 	if value < 0 {
-		// 只给了分族值但客户端不支持分族：取最宽松（最大）的一个作为全局值，
-		// 以免误伤；若都未设置则不改动。
-		switch {
-		case limit.IPv4 >= 0 && limit.IPv6 >= 0:
-			value = maxInt64(limit.IPv4, limit.IPv6)
-		case limit.IPv4 >= 0:
-			value = limit.IPv4
-		case limit.IPv6 >= 0:
-			value = limit.IPv6
-		default:
-			return nil
-		}
+		// -1 表示「不修改」。
+		return nil
 	}
 
 	form := url.Values{}
@@ -697,7 +419,7 @@ func (q *QBittorrent) SetUploadLimit(ctx context.Context, limit SpeedLimit) erro
 		return fmt.Errorf("设置 qBittorrent 上传限速失败: %w", err)
 	}
 
-	q.tracker.record(SpeedLimit{Total: value, IPv4: limit.IPv4, IPv6: limit.IPv6})
+	q.tracker.record(SpeedLimit{Total: value})
 	return nil
 }
 
@@ -707,33 +429,4 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
-}
-
-// ---------------------------------------------------------------------------
-// 地址族判定
-// ---------------------------------------------------------------------------
-
-// classifyIP 根据地址字符串判断其地址族。
-func classifyIP(s string) Family {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return FamilyUnknown
-	}
-	// 去掉可能存在的端口后缀（形如 [::1]:51413 或 1.2.3.4:6881）
-	if strings.HasPrefix(s, "[") {
-		if i := strings.Index(s, "]"); i > 0 {
-			s = s[1:i]
-		}
-	} else if strings.Count(s, ":") == 1 {
-		if i := strings.LastIndex(s, ":"); i > 0 {
-			s = s[:i]
-		}
-	}
-	if strings.Contains(s, ":") {
-		return FamilyIPv6
-	}
-	if strings.Contains(s, ".") {
-		return FamilyIPv4
-	}
-	return FamilyUnknown
 }

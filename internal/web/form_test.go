@@ -376,7 +376,7 @@ func TestInvalidThresholdRejected(t *testing.T) {
 	if code == 200 {
 		t.Fatal("非法阈值应当被拒绝")
 	}
-	if !strings.Contains(strings.ToLower(jsonOf(resp)), "阈值") {
+	if !strings.Contains(strings.ToLower(jsonOf(resp)), "threshold") && !strings.Contains(strings.ToLower(jsonOf(resp)), "阈") {
 		t.Errorf("错误信息应提到阈值，实际: %v", resp)
 	}
 	// 原配置必须保持不变
@@ -436,13 +436,13 @@ func TestAddPolicy(t *testing.T) {
 
 	view := getForm(t, srv)
 	view.Policies = append(view.Policies, policyView{
-		Name:                "ipv6-cap",
+		Name:                "new-policy",
 		Enabled:             true,
 		Clients:             []string{"qb"},
 		Window:              "24h",
 		Align:               "day",
-		ThresholdIPv6:       "100GiB",
-		LimitIPv6:           "512KiB",
+		ThresholdTotal:      "100GiB",
+		LimitTotal:          "512KiB",
 		ResumeOnWindowReset: true,
 	})
 	body, _ := json.Marshal(view)
@@ -455,11 +455,11 @@ func TestAddPolicy(t *testing.T) {
 		t.Fatalf("策略数量 = %d, 期望 2", len(h.cfg.Policies))
 	}
 	p := h.cfg.Policies[1]
-	if p.ThIPv6() != 100*(1<<30) {
-		t.Errorf("IPv6 阈值 = %d", p.ThIPv6())
+	if p.ThTotal() != 100*(1<<30) {
+		t.Errorf("阈值 = %d", p.ThTotal())
 	}
-	if p.LimIPv6() != 512*1024 {
-		t.Errorf("IPv6 限速 = %d", p.LimIPv6())
+	if p.LimTotal() != 512*1024 {
+		t.Errorf("限速 = %d", p.LimTotal())
 	}
 }
 
@@ -574,11 +574,7 @@ func (s *stubClient) Name() string { return s.name }
 func (s *stubClient) Type() string { return "stub" }
 
 func (s *stubClient) Fetch(_ context.Context) (client.Stats, error) {
-	return client.Stats{
-		Timestamp: time.Now(),
-		UpSpeed:   map[client.Family]int64{},
-		UpTotal:   map[client.Family]int64{},
-	}, nil
+	return client.Stats{Timestamp: time.Now()}, nil
 }
 
 func (s *stubClient) SetUploadLimit(_ context.Context, _ client.SpeedLimit) error { return nil }

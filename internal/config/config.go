@@ -134,11 +134,6 @@ type ClientConfig struct {
 	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
 	// Timeout 是单次 API 调用的超时。
 	Timeout Duration `yaml:"timeout"`
-
-	// UploadLimitIPv4 / UploadLimitIPv6 是该客户端协议的族分离限速值。
-	// 0 表示不限速（无限）；当客户端不支持族分离时会被忽略。
-	UploadLimitIPv4 Bitrate `yaml:"upload_limit_ipv4"`
-	UploadLimitIPv6 Bitrate `yaml:"upload_limit_ipv6"`
 }
 
 // IsEnabled 返回该客户端是否启用（默认启用）。
@@ -182,19 +177,13 @@ type PolicyConfig struct {
 	// rolling（默认）表示从进程启动或上次重置起算的滑动周期。
 	Align string `yaml:"align"`
 
-	// --- 触发条件（任一满足即触发）---
-	// ThresholdTotal 是 IPv4+IPv6 合计上传阈值（字节），0 表示不判断。
+	// --- 触发条件 ---
+	// ThresholdTotal 是周期内的上传总量阈值（字节），必须大于 0。
 	ThresholdTotal Bytes `yaml:"threshold_total"`
-	// ThresholdIPv4 / ThresholdIPv6 是分族阈值（字节），0 表示不判断。
-	ThresholdIPv4 Bytes `yaml:"threshold_ipv4"`
-	ThresholdIPv6 Bytes `yaml:"threshold_ipv6"`
 
 	// --- 限速动作 ---
 	// LimitTotal 是触发后设置的上传限速（字节/秒），0 表示完全不限速。
-	// 若同时设置了分族限速且客户端支持，则优先使用分族值。
 	LimitTotal Bitrate `yaml:"limit_total"`
-	LimitIPv4  Bitrate `yaml:"limit_ipv4"`
-	LimitIPv6  Bitrate `yaml:"limit_ipv6"`
 
 	// ResumeOnWindowReset 为 true 时，进入新周期自动恢复到客户端原始限速。
 	ResumeOnWindowReset *bool `yaml:"resume_on_window_reset"`
@@ -210,10 +199,8 @@ type PolicyConfig struct {
 	// 典型用法：周期结束后不想立刻全速放开（怕又瞬间冲满额度），
 	// 而是回到一个中间速度，例如 5 MiB/s。
 	//
-	// 若设为 >=0，则优先采用它，而不再回到客户端的原始限速。
+	// 若设为 >0，则优先采用它，而不再回到客户端的原始限速。
 	ResumeLimitTotal Bitrate `yaml:"resume_limit_total"`
-	ResumeLimitIPv4  Bitrate `yaml:"resume_limit_ipv4"`
-	ResumeLimitIPv6  Bitrate `yaml:"resume_limit_ipv6"`
 
 	// Cooldown 触发限速后至少保持多久才允许解除，避免临界抖动。
 	Cooldown Duration `yaml:"cooldown"`
@@ -227,48 +214,24 @@ func (p PolicyConfig) ShouldResume() bool {
 	return p.ResumeOnWindowReset == nil || *p.ResumeOnWindowReset
 }
 
-// --- 解除限速后的速度（三态语义）-----------------------------------------
-//
-// 内部统一用 -1 表示「未设置」，因此这几个访问器把 YAML 里
-// 的「缺省」和「显式写 0」区分开：
-//
-//	未写该字段      -> -1（恢复到触发前的原始限速）
-//	写了 0          -> 0 （显式不限速）
-//	写了正值        -> 该值
-//
-// 注意 Bitrate 的零值是 0，无法与「显式写 0」区分，
-// 所以缺省判断必须由调用方（form 层）在解析 YAML 时完成，
-// 这里只做取值与「是否启用自定义恢复速度」的判断。
-
 // HasResumeLimit 返回是否配置了自定义的恢复速度。
 func (p PolicyConfig) HasResumeLimit() bool {
-	return p.ResumeLimitTotal > 0 || p.ResumeLimitIPv4 > 0 || p.ResumeLimitIPv6 > 0
+	return p.ResumeLimitTotal > 0
 }
 
 // ResumeTotal / ResumeIPv4 / ResumeIPv6 返回自定义恢复速度。
 func (p PolicyConfig) ResumeTotal() int64 { return int64(p.ResumeLimitTotal) }
-func (p PolicyConfig) ResumeIPv4() int64  { return int64(p.ResumeLimitIPv4) }
-func (p PolicyConfig) ResumeIPv6() int64  { return int64(p.ResumeLimitIPv6) }
 
 // --- 便于调用方使用的 int64 访问器（Bytes / Bitrate 只是 YAML 表现层包装）---
 
-// ThTotal / ThIPv4 / ThIPv6 返回各阈值的字节数。
+// ThTotal 返回阈值的字节数。
 func (p PolicyConfig) ThTotal() int64 { return int64(p.ThresholdTotal) }
-func (p PolicyConfig) ThIPv4() int64  { return int64(p.ThresholdIPv4) }
-func (p PolicyConfig) ThIPv6() int64  { return int64(p.ThresholdIPv6) }
 
-// LimTotal / LimIPv4 / LimIPv6 返回各限速的字节/秒值。
+// LimTotal 返回限速的字节/秒值。
 func (p PolicyConfig) LimTotal() int64 { return int64(p.LimitTotal) }
-func (p PolicyConfig) LimIPv4() int64  { return int64(p.LimitIPv4) }
-func (p PolicyConfig) LimIPv6() int64  { return int64(p.LimitIPv6) }
 
-// UsesFamilyLimit 返回是否配置了分族限速。
-func (p PolicyConfig) UsesFamilyLimit() bool { return p.LimIPv4() > 0 || p.LimIPv6() > 0 }
-
-// HasThreshold 返回是否配置了至少一个阈值。
-func (p PolicyConfig) HasThreshold() bool {
-	return p.ThTotal() > 0 || p.ThIPv4() > 0 || p.ThIPv6() > 0
-}
+// HasThreshold 返回是否配置了阈值。
+func (p PolicyConfig) HasThreshold() bool { return p.ThTotal() > 0 }
 
 // AppliesTo 判断该策略是否作用于指定客户端。
 func (p PolicyConfig) AppliesTo(clientName string) bool {
@@ -439,26 +402,22 @@ func Default() *Config {
 		HistoryPoints: 720,
 		Clients: []ClientConfig{
 			{
-				Name:            "qbittorrent",
-				Type:            "qbittorrent",
-				URL:             "http://192.168.1.10:8080",
-				Username:        "admin",
-				Password:        "adminadmin",
-				Enabled:         &no, // 示例条目，需用户在面板里填好地址后手动启用
-				Timeout:         Duration(10 * time.Second),
-				UploadLimitIPv4: 0,
-				UploadLimitIPv6: 0,
+				Name:     "qbittorrent",
+				Type:     "qbittorrent",
+				URL:      "http://192.168.1.10:8080",
+				Username: "admin",
+				Password: "adminadmin",
+				Enabled:  &no, // 示例条目，需用户在面板里填好地址后手动启用
+				Timeout:  Duration(10 * time.Second),
 			},
 			{
-				Name:            "transmission",
-				Type:            "transmission",
-				URL:             "http://192.168.1.10:9091",
-				Username:        "",
-				Password:        "",
-				Enabled:         &no, // 同上，示例条目默认不启用
-				Timeout:         Duration(10 * time.Second),
-				UploadLimitIPv4: 0,
-				UploadLimitIPv6: 0,
+				Name:     "transmission",
+				Type:     "transmission",
+				URL:      "http://192.168.1.10:9091",
+				Username: "",
+				Password: "",
+				Enabled:  &no, // 同上，示例条目默认不启用
+				Timeout:  Duration(10 * time.Second),
 			},
 		},
 		Policies: []PolicyConfig{
@@ -516,6 +475,10 @@ func Load(path string) (cfg *Config, created bool, err error) {
 	// （典型症状是 clients[0].type 变成空字符串）。
 	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 
+	// 旧版本遗留的 IPv4/IPv6 分族字段：读取时忽略，并尽量就地清理。
+	// 详见 migrateLegacyFamilyFields 的说明。
+	raw = migrateLegacyFamilyFields(path, raw)
+
 	cfg = Default() // 先铺默认值，yaml 覆盖其上
 	if err := yaml.Unmarshal(raw, cfg); err != nil {
 		return nil, false, fmt.Errorf("解析配置 %s 失败: %w", path, err)
@@ -526,6 +489,74 @@ func Load(path string) (cfg *Config, created bool, err error) {
 		return nil, false, err
 	}
 	return cfg, false, nil
+}
+
+// legacyFamilyKeys 是 v1.1 起不再支持的 IPv4/IPv6 分族字段。
+//
+// 移除原因：两个下载器的公开 API 都无法提供可靠的分族数据 ——
+// Transmission 只能按当前 peer 占比估算、qBittorrent 的 peer 明细
+// 在保种空闲时经常缺失。强行估算会产生数量级错误
+// （实测出现过 2 TB 级的虚假累计），因此改为只统计总上传量。
+var legacyFamilyKeys = []string{
+	"threshold_ipv4", "threshold_ipv6",
+	"limit_ipv4", "limit_ipv6",
+	"resume_limit_ipv4", "resume_limit_ipv6",
+	"upload_limit_ipv4", "upload_limit_ipv6",
+}
+
+// migrateLegacyFamilyFields 从配置原文中剔除已废弃的分族字段。
+//
+// 处理策略：
+//   - 解析层面：这些键已不在结构体中，yaml 会直接忽略，不影响启动；
+//   - 文件层面：若检测到残留，先备份原文件为 <name>.bak，
+//     再原地改写，避免用户下次编辑 YAML 时被这些无效字段误导。
+//
+// 返回可供解析的内容（始终安全）。写盘失败不影响启动。
+func migrateLegacyFamilyFields(path string, raw []byte) []byte {
+	text := string(raw)
+	found := false
+	for _, k := range legacyFamilyKeys {
+		// 形如 "  threshold_ipv4: 123" / "  limit_ipv4: 0"
+		if strings.Contains(text, k+":") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return raw
+	}
+
+	// 逐行删除这些键（保留其它内容与缩进不变）。
+	lines := strings.Split(text, "\n")
+	kept := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		trimmed := strings.TrimSpace(ln)
+		drop := false
+		for _, k := range legacyFamilyKeys {
+			if strings.HasPrefix(trimmed, k+":") {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			kept = append(kept, ln)
+		}
+	}
+	cleaned := []byte(strings.Join(kept, "\n"))
+
+	// 先备份再改写。备份失败则放弃改写，宁可留着冗余字段也不冒险。
+	if path != "" {
+		bak := path + ".bak"
+		if _, err := os.Stat(bak); os.IsNotExist(err) {
+			if err := os.WriteFile(bak, raw, 0o600); err == nil {
+				_ = os.WriteFile(path, cleaned, 0o600)
+			}
+		} else {
+			// 已有备份（说明之前迁移过），直接改写即可。
+			_ = os.WriteFile(path, cleaned, 0o600)
+		}
+	}
+	return cleaned
 }
 
 // applyEnv 用 BTG_ 前缀的环境变量覆盖配置。
@@ -640,9 +671,6 @@ func (c *Config) Validate() error {
 		if cl.Timeout.Std() <= 0 {
 			cl.Timeout = Duration(10 * time.Second)
 		}
-		if cl.UploadLimitIPv4 < 0 || cl.UploadLimitIPv6 < 0 {
-			return fmt.Errorf("clients[%d] (%s): 限速值不能为负", i, cl.Name)
-		}
 
 		// API Key 校验。只做格式提示，不阻断启动——因为 Key 的格式
 		// 可能随 qBittorrent 版本变化，过度严格会导致升级后无法启动。
@@ -688,10 +716,10 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("policies[%d] (%s): align 取值非法 %q（可选 rolling/hour/day/week/month）", i, p.Name, p.Align)
 		}
 
-		if p.ThresholdTotal <= 0 && p.ThresholdIPv4 <= 0 && p.ThresholdIPv6 <= 0 {
-			return fmt.Errorf("policies[%d] (%s): 至少需要设置 threshold_total / threshold_ipv4 / threshold_ipv6 之一", i, p.Name)
+		if p.ThresholdTotal <= 0 {
+			return fmt.Errorf("policies[%d] (%s): 必须设置 threshold_total（本周期允许的上传总量）", i, p.Name)
 		}
-		if p.LimitTotal < 0 || p.LimitIPv4 < 0 || p.LimitIPv6 < 0 {
+		if p.LimitTotal < 0 {
 			return fmt.Errorf("policies[%d] (%s): 限速值不能为负", i, p.Name)
 		}
 		// 校验 clients 名单中的名字都存在。

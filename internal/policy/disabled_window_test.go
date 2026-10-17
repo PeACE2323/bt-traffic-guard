@@ -30,7 +30,7 @@ func TestDisabledPolicyStillResetsWindow(t *testing.T) {
 	h.cli.addBytes(5000)
 	h.poll()
 
-	before := h.mon.Aggregate().TotalWindow()
+	before := h.mon.Aggregate().WindowBytes
 	t.Logf("滚动前周期累计: %d", before)
 	if before == 0 {
 		t.Fatal("前置条件：应有累计量")
@@ -44,7 +44,7 @@ func TestDisabledPolicyStillResetsWindow(t *testing.T) {
 	h.poll()
 	h.evaluate()
 
-	after := h.mon.Aggregate().TotalWindow()
+	after := h.mon.Aggregate().WindowBytes
 	t.Logf("滚动后周期累计: %d", after)
 
 	if after != 0 {

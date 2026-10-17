@@ -58,8 +58,6 @@ func TestResumeWithoutCustomFallsBackToBaseline(t *testing.T) {
 func TestResumeExplicitZero(t *testing.T) {
 	pc := basePolicy()
 	pc.ResumeLimitTotal = 0 // 显式不限速
-	pc.ResumeLimitIPv4 = 0
-	pc.ResumeLimitIPv6 = 0
 	h := newHarness(t, pc)
 
 	h.poll()

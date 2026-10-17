@@ -86,8 +86,6 @@ type runtime struct {
 	limited bool
 	// limitedAt 是触发时刻，用于冷却判断。
 	limitedAt time.Time
-	// triggeredFams 记录是本策略的哪些族触发的（用于周期滚动时按族重置）。
-	triggeredFams []client.Family
 	// appliedLimits 记录我们对每个客户端下发的限速（用于恢复与展示）。
 	appliedLimits map[string]client.SpeedLimit
 	// baselineLimits 记录触发前的客户端原始限速，恢复时回填。
@@ -264,7 +262,6 @@ func (e *Engine) mergeAdoptedInner(prev map[string]*runtime, oldEvents []Event, 
 		rt.windowEnd = p.windowEnd
 		rt.limited = p.limited
 		rt.limitedAt = p.limitedAt
-		rt.triggeredFams = p.triggeredFams
 		rt.exceededBytes = p.exceededBytes
 		rt.exceededThres = p.exceededThres
 		rt.lastError = p.lastError
@@ -340,13 +337,13 @@ func (e *Engine) Evaluate(ctx context.Context) {
 			continue
 		}
 
-		totals, famTotals := e.collectWindowBytes(targets)
+		totals := e.collectWindowBytes(targets)
 
 		// --- 3. 触发判断 ---
 		if !rt.limited {
-			reason, bytes, thres, fams := e.shouldTrigger(ctx, rt, totals, famTotals)
+			reason, bytes, thres := e.shouldTrigger(ctx, rt, totals)
 			if reason != "" {
-				e.applyLimit(ctx, rt, targets, bytes, thres, fams, reason)
+				e.applyLimit(ctx, rt, targets, bytes, thres, reason)
 			}
 		} else {
 			// 已限速：检查是否需要重新下发（例如客户端重启后限速丢失）。
@@ -356,89 +353,38 @@ func (e *Engine) Evaluate(ctx context.Context) {
 }
 
 // collectWindowBytes 汇总目标客户端在本周期的累计上传量。
-func (e *Engine) collectWindowBytes(targets []*client.Managed) (int64, map[client.Family]int64) {
+func (e *Engine) collectWindowBytes(targets []*client.Managed) int64 {
 	var total int64
-	fam := map[client.Family]int64{}
 	for _, c := range targets {
 		snap, ok := e.monitor.Snapshot(c.Name())
 		if !ok {
 			continue
 		}
-		for f, v := range snap.WindowBytes {
-			fam[f] += v
-			total += v
-		}
+		total += snap.WindowBytes
 	}
-	return total, fam
+	return total
 }
 
-// shouldTrigger 判断是否应当触发限速，返回触发的描述与相关数据。
-func (e *Engine) shouldTrigger(_ context.Context, rt *runtime,
-	total int64, famTotals map[client.Family]int64) (reason string, bytes, thres int64, fams []client.Family) {
-
-	// 分族阈值优先判定，因为更精确。
-	var triggers []string
-	thTotal, thV4, thV6 := rt.cfg.ThTotal(), rt.cfg.ThIPv4(), rt.cfg.ThIPv6()
-
-	if thV4 > 0 && famTotals[client.FamilyIPv4] >= thV4 {
-		triggers = append(triggers, fmt.Sprintf("IPv4 %s ≥ %s",
-			traffic.FormatBytes(famTotals[client.FamilyIPv4]), traffic.FormatBytes(thV4)))
-		fams = append(fams, client.FamilyIPv4)
+// shouldTrigger 判断是否应当触发限速，返回触发描述与相关数据。
+func (e *Engine) shouldTrigger(_ context.Context, rt *runtime, total int64) (reason string, bytes, thres int64) {
+	th := rt.cfg.ThTotal()
+	if th <= 0 || total < th {
+		return "", 0, 0
 	}
-	if thV6 > 0 && famTotals[client.FamilyIPv6] >= thV6 {
-		triggers = append(triggers, fmt.Sprintf("IPv6 %s ≥ %s",
-			traffic.FormatBytes(famTotals[client.FamilyIPv6]), traffic.FormatBytes(thV6)))
-		fams = append(fams, client.FamilyIPv6)
-	}
-	// 合计阈值：若配置了分族阈值就不重复判断合计，
-	// 以免分族阈值较小时被合计阈值重复触发。
-	if thTotal > 0 && thV4 == 0 && thV6 == 0 && total >= thTotal {
-		triggers = append(triggers, fmt.Sprintf("合计 %s ≥ %s",
-			traffic.FormatBytes(total), traffic.FormatBytes(thTotal)))
-	}
-	// 若同时配置了分族与合计阈值，合计阈值作为兜底：IPv4/IPv6 均为 0 时仍可用。
-	if thTotal > 0 && (thV4 > 0 || thV6 > 0) && len(fams) == 0 && total >= thTotal {
-		triggers = append(triggers, fmt.Sprintf("合计 %s ≥ %s",
-			traffic.FormatBytes(total), traffic.FormatBytes(thTotal)))
-	}
-
-	if len(triggers) == 0 {
-		return "", 0, 0, nil
-	}
-
-	// 阈值取用于展示的那个。
-	switch {
-	case thTotal > 0 && len(fams) == 0:
-		thres = thTotal
-	case thV4 > 0 && contains(fams, client.FamilyIPv4):
-		thres = thV4
-	case thV6 > 0:
-		thres = thV6
-	default:
-		thres = thTotal
-	}
-	return strings.Join(triggers, "；"), total, thres, fams
+	reason = fmt.Sprintf("本周期上传 %s ≥ 阈值 %s",
+		traffic.FormatBytes(total), traffic.FormatBytes(th))
+	return reason, total, th
 }
 
 // applyLimit 下发限速并把策略置为 limited。
 func (e *Engine) applyLimit(ctx context.Context, rt *runtime, targets []*client.Managed,
-	bytes, thres int64, fams []client.Family, reason string) {
+	bytes, thres int64, reason string) {
 
-	limit := client.SpeedLimit{
-		Total:     rt.cfg.LimTotal(),
-		IPv4:      rt.cfg.LimIPv4(),
-		IPv6:      rt.cfg.LimIPv6(),
-		UseFamily: rt.cfg.UsesFamilyLimit(),
-	}
-	// 未配置分族限速时，用总限速统一处理（-1 表示不修改，这里必须给出明确值）。
-	if !limit.UseFamily {
-		limit.IPv4 = -1
-		limit.IPv6 = -1
-		// LimitTotal 默认为 0（不限速）在触发场景下没有意义，
-		// 因此若用户忘了配置，给一个保守的默认值 1 MiB/s。
-		if limit.Total <= 0 {
-			limit.Total = 1 << 20
-		}
+	limit := client.SpeedLimit{Total: rt.cfg.LimTotal()}
+	// LimitTotal 默认为 0（不限速）在触发场景下没有意义，
+	// 因此若用户忘了配置，给一个保守的默认值 1 MiB/s。
+	if limit.Total <= 0 {
+		limit.Total = 1 << 20
 	}
 
 	applied := []string{}
@@ -464,7 +410,7 @@ func (e *Engine) applyLimit(ctx context.Context, rt *runtime, targets []*client.
 			if snap, ok := e.monitor.Snapshot(c.Name()); ok && snap.CurrentUpLimit > 0 {
 				// 客户端确实处于限速状态，且此时我们还没改过它，
 				// 说明这是用户自己的设置，恢复时应回到该值。
-				base = client.SpeedLimit{Total: snap.CurrentUpLimit, IPv4: -1, IPv6: -1}
+				base = client.SpeedLimit{Total: snap.CurrentUpLimit}
 			}
 			rt.baselineLimits[c.Name()] = base
 			rt.baselineKnown[c.Name()] = true
@@ -482,7 +428,6 @@ func (e *Engine) applyLimit(ctx context.Context, rt *runtime, targets []*client.
 
 	rt.limited = true
 	rt.limitedAt = time.Now()
-	rt.triggeredFams = fams
 	rt.exceededBytes = bytes
 	rt.exceededThres = thres
 
@@ -632,24 +577,14 @@ func (e *Engine) resumeLimit(ctx context.Context, rt *runtime, reason string) {
 		var restore client.SpeedLimit
 
 		if useCustom {
-			restore = client.SpeedLimit{
-				Total:     rt.cfg.ResumeTotal(),
-				IPv4:      rt.cfg.ResumeIPv4(),
-				IPv6:      rt.cfg.ResumeIPv6(),
-				UseFamily: rt.cfg.ResumeIPv4() > 0 || rt.cfg.ResumeIPv6() > 0,
-			}
-			// 未配置分族速度时走全局限速路径（-1 表示不改分族值）。
-			if !restore.UseFamily {
-				restore.IPv4 = -1
-				restore.IPv6 = -1
-			}
+			restore = client.SpeedLimit{Total: rt.cfg.ResumeTotal()}
 		} else {
 			base, ok := rt.baselineLimits[c.Name()]
 			if !ok {
 				base = client.NewUnlimited()
 			}
 			// 基线里 Total 为 -1（未知）时按不限速处理。
-			restore = client.SpeedLimit{Total: base.Total, IPv4: -1, IPv6: -1}
+			restore = client.SpeedLimit{Total: base.Total}
 			if restore.Total < 0 {
 				restore.Total = 0
 			}
@@ -664,7 +599,6 @@ func (e *Engine) resumeLimit(ctx context.Context, rt *runtime, reason string) {
 	}
 
 	rt.limited = false
-	rt.triggeredFams = nil
 	rt.appliedLimits = map[string]client.SpeedLimit{}
 	// 注意：baselineLimits / baselineKnown 必须保留，
 	// 它们是客户端真正的原始限速，跨周期复用，不因恢复而清除。
@@ -740,27 +674,19 @@ type PolicyState struct {
 	WindowLabel string    `json:"window_label"`
 
 	ThresholdTotal int64 `json:"threshold_total"`
-	ThresholdIPv4  int64 `json:"threshold_ipv4"`
-	ThresholdIPv6  int64 `json:"threshold_ipv6"`
-
-	LimitTotal int64 `json:"limit_total"`
-	LimitIPv4  int64 `json:"limit_ipv4"`
-	LimitIPv6  int64 `json:"limit_ipv6"`
+	LimitTotal     int64 `json:"limit_total"`
 
 	Clients []string `json:"clients"`
 
 	// 运行状态
-	Limited       bool             `json:"limited"`
-	LimitedAt     time.Time        `json:"limited_at"`
-	LimitedFor    string           `json:"limited_for"`
-	CurrentTotal  int64            `json:"current_total"`
-	CurrentFam    map[string]int64 `json:"current_family"`
-	ProgressTotal float64          `json:"progress_total"`
-	ProgressIPv4  float64          `json:"progress_ipv4"`
-	ProgressIPv6  float64          `json:"progress_ipv6"`
-	LastError     string           `json:"last_error,omitempty"`
-	Cooldown      string           `json:"cooldown"`
-	ResumeOnReset bool             `json:"resume_on_window_reset"`
+	Limited       bool      `json:"limited"`
+	LimitedAt     time.Time `json:"limited_at"`
+	LimitedFor    string    `json:"limited_for"`
+	CurrentTotal  int64     `json:"current_total"`
+	ProgressTotal float64   `json:"progress_total"`
+	LastError     string    `json:"last_error,omitempty"`
+	Cooldown      string    `json:"cooldown"`
+	ResumeOnReset bool      `json:"resume_on_window_reset"`
 }
 
 // States 返回所有策略的当前状态。
@@ -779,7 +705,7 @@ func (e *Engine) States() []PolicyState {
 	out := make([]PolicyState, 0, len(policies))
 	for _, rt := range policies {
 		targets := e.registry.Resolve(rt.cfg.Clients)
-		total, famTotals := e.collectWindowBytes(targets)
+		total := e.collectWindowBytes(targets)
 
 		st := PolicyState{
 			Name:           rt.cfg.Name,
@@ -790,22 +716,14 @@ func (e *Engine) States() []PolicyState {
 			WindowEnd:      rt.windowEnd,
 			WindowLabel:    fmt.Sprintf("%s → %s", rt.windowStart.In(loc).Format("01-02 15:04"), rt.windowEnd.In(loc).Format("01-02 15:04")),
 			ThresholdTotal: rt.cfg.ThTotal(),
-			ThresholdIPv4:  rt.cfg.ThIPv4(),
-			ThresholdIPv6:  rt.cfg.ThIPv6(),
 			LimitTotal:     rt.cfg.LimTotal(),
-			LimitIPv4:      rt.cfg.LimIPv4(),
-			LimitIPv6:      rt.cfg.LimIPv6(),
 			Clients:        rt.cfg.Clients,
 			Limited:        rt.limited,
 			LimitedAt:      rt.limitedAt,
 			CurrentTotal:   total,
-			CurrentFam: map[string]int64{
-				string(client.FamilyIPv4): famTotals[client.FamilyIPv4],
-				string(client.FamilyIPv6): famTotals[client.FamilyIPv6],
-			},
-			LastError:     rt.lastError,
-			Cooldown:      rt.cfg.Cooldown.String(),
-			ResumeOnReset: rt.cfg.ShouldResume(),
+			LastError:      rt.lastError,
+			Cooldown:       rt.cfg.Cooldown.String(),
+			ResumeOnReset:  rt.cfg.ShouldResume(),
 		}
 		if rt.limited && !rt.limitedAt.IsZero() {
 			st.LimitedFor = time.Since(rt.limitedAt).Round(time.Second).String()
@@ -815,8 +733,6 @@ func (e *Engine) States() []PolicyState {
 			elapsed := now.Sub(rt.windowStart)
 			st.ProgressTotal = clamp01(float64(elapsed) / float64(span))
 		}
-		st.ProgressIPv4 = ratio(famTotals[client.FamilyIPv4], rt.cfg.ThIPv4())
-		st.ProgressIPv6 = ratio(famTotals[client.FamilyIPv6], rt.cfg.ThIPv6())
 		out = append(out, st)
 	}
 	return out
@@ -888,8 +804,8 @@ func (e *Engine) ForceTrigger(ctx context.Context, name string) error {
 	if len(targets) == 0 {
 		return fmt.Errorf("策略 %q 没有匹配到任何客户端", name)
 	}
-	total, _ := e.collectWindowBytes(targets)
-	e.applyLimit(ctx, target, targets, total, target.cfg.ThTotal(), nil, "手动触发")
+	total := e.collectWindowBytes(targets)
+	e.applyLimit(ctx, target, targets, total, target.cfg.ThTotal(), "手动触发")
 	return nil
 }
 
@@ -926,26 +842,7 @@ func (e *Engine) avgBaseline(rt *runtime) int64 {
 
 // describeLimit 生成限速的可读描述。
 func describeLimit(l client.SpeedLimit) string {
-	if l.UseFamily {
-		parts := []string{}
-		if l.IPv4 >= 0 {
-			parts = append(parts, "IPv4 "+traffic.FormatSpeed(l.IPv4))
-		}
-		if l.IPv6 >= 0 {
-			parts = append(parts, "IPv6 "+traffic.FormatSpeed(l.IPv6))
-		}
-		return strings.Join(parts, "，")
-	}
 	return traffic.FormatSpeed(l.Total)
-}
-
-func contains(fams []client.Family, f client.Family) bool {
-	for _, x := range fams {
-		if x == f {
-			return true
-		}
-	}
-	return false
 }
 
 func nearlyEqual(a, b int64, tol float64) bool {

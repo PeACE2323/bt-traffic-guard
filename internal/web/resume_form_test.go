@@ -26,7 +26,6 @@ func TestResumeLimitFormRoundTrip(t *testing.T) {
 	// 填写恢复速度
 	p := &view.Policies[0]
 	p.ResumeLimitTotal = "5MiB"
-	p.ResumeLimitIPv4 = "1MiB"
 
 	body, _ := json.Marshal(view)
 	w = f.do(t, http.MethodPost, "/api/config/form", string(body), nil)
@@ -43,9 +42,6 @@ func TestResumeLimitFormRoundTrip(t *testing.T) {
 	}
 	if f.cfg.Policies[0].ResumeTotal() != 5<<20 {
 		t.Errorf("ResumeTotal = %d, 期望 %d", f.cfg.Policies[0].ResumeTotal(), 5<<20)
-	}
-	if f.cfg.Policies[0].ResumeIPv4() != 1<<20 {
-		t.Errorf("ResumeIPv4 = %d, 期望 %d", f.cfg.Policies[0].ResumeIPv4(), 1<<20)
 	}
 	if !f.cfg.Policies[0].HasResumeLimit() {
 		t.Error("HasResumeLimit 应为 true")

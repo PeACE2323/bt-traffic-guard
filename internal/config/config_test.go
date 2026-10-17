@@ -200,8 +200,6 @@ func TestValidateRejectsBadConfig(t *testing.T) {
 		{"客户端名重复", func(c *Config) { c.Clients[1].Name = c.Clients[0].Name }},
 		{"缺少阈值", func(c *Config) {
 			c.Policies[0].ThresholdTotal = 0
-			c.Policies[0].ThresholdIPv4 = 0
-			c.Policies[0].ThresholdIPv6 = 0
 		}},
 		{"align 非法", func(c *Config) { c.Policies[0].Align = "fortnight" }},
 		{"策略引用了不存在的客户端", func(c *Config) { c.Policies[0].Clients = []string{"nope"} }},

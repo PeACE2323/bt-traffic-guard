@@ -190,8 +190,6 @@ func (a *App) applyConfig(cfg *config.Config, first bool) {
 			APIKey:             cc.APIKey,
 			InsecureSkipVerify: cc.InsecureSkipVerify,
 			Timeout:            cc.Timeout.Std(),
-			UploadLimitIPv4:    cc.UploadLimitIPv4.Int64(),
-			UploadLimitIPv6:    cc.UploadLimitIPv6.Int64(),
 		})
 		if err != nil {
 			a.logf("error", "构造客户端 %s 失败: %v", cc.Name, err)

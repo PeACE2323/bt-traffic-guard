@@ -40,8 +40,8 @@ func (s *stubDownloader) Fetch(_ context.Context) (client.Stats, error) {
 	}
 	return client.Stats{
 		Timestamp:      time.Now(),
-		UpSpeed:        map[client.Family]int64{client.FamilyIPv4: s.speed},
-		UpTotal:        map[client.Family]int64{client.FamilyIPv4: s.total},
+		UpSpeed:        s.speed,
+		UpTotal:        s.total,
 		DlSpeed:        100,
 		TorrentCount:   3,
 		CurrentUpLimit: s.limit,
@@ -221,8 +221,8 @@ func TestStatusReflectsClientSpeed(t *testing.T) {
 	w := f.do(t, http.MethodGet, "/api/status", "", nil)
 	var resp struct {
 		Clients []struct {
-			Name    string           `json:"name"`
-			UpSpeed map[string]int64 `json:"up_speed"`
+			Name    string `json:"name"`
+			UpSpeed int64  `json:"up_speed"`
 		} `json:"clients"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &resp)
@@ -230,8 +230,8 @@ func TestStatusReflectsClientSpeed(t *testing.T) {
 	if len(resp.Clients) != 1 {
 		t.Fatalf("客户端数 = %d", len(resp.Clients))
 	}
-	if resp.Clients[0].UpSpeed["ipv4"] != 4096 {
-		t.Errorf("上传速度 = %d, 期望 4096", resp.Clients[0].UpSpeed["ipv4"])
+	if resp.Clients[0].UpSpeed != 4096 {
+		t.Errorf("上传速度 = %d, 期望 4096", resp.Clients[0].UpSpeed)
 	}
 }
 
@@ -575,7 +575,7 @@ func TestHandleClientLimit(t *testing.T) {
 	// 分族限速
 	eighty := int64(80)
 	_ = eighty
-	body = `{"name":"qb","limit":0,"limit_ipv4":80}`
+	body = `{"name":"qb","limit":0}`
 	w = f.do(t, http.MethodPost, "/api/client/limit", body, nil)
 	if w.Code != 200 {
 		t.Errorf("分族限速状态码 = %d: %s", w.Code, w.Body.String())

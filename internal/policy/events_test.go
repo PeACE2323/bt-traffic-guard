@@ -137,109 +137,12 @@ func TestEventsBounded(t *testing.T) {
 // 阈值判定分支
 // ---------------------------------------------------------------------------
 
-// TestShouldTriggerFamilyThresholds 验证分族阈值的各分支。
-func TestShouldTriggerFamilyThresholds(t *testing.T) {
-	cases := []struct {
-		name    string
-		pc      func(*config.PolicyConfig)
-		totals  map[client.Family]int64
-		total   int64
-		wantHit bool
-	}{
-		{
-			name:    "仅合计阈值，未达",
-			pc:      func(p *config.PolicyConfig) { p.ThresholdTotal = 1000 },
-			totals:  map[client.Family]int64{},
-			total:   500,
-			wantHit: false,
-		},
-		{
-			name:    "仅合计阈值，达到",
-			pc:      func(p *config.PolicyConfig) { p.ThresholdTotal = 1000 },
-			totals:  map[client.Family]int64{},
-			total:   1000,
-			wantHit: true,
-		},
-		{
-			name:    "仅 IPv4 阈值，未达",
-			pc:      func(p *config.PolicyConfig) { p.ThresholdIPv4 = 1000 },
-			totals:  map[client.Family]int64{client.FamilyIPv4: 999},
-			total:   999,
-			wantHit: false,
-		},
-		{
-			name:    "仅 IPv4 阈值，达到",
-			pc:      func(p *config.PolicyConfig) { p.ThresholdIPv4 = 1000 },
-			totals:  map[client.Family]int64{client.FamilyIPv4: 1000},
-			total:   1000,
-			wantHit: true,
-		},
-		{
-			name:    "仅 IPv6 阈值，达到",
-			pc:      func(p *config.PolicyConfig) { p.ThresholdIPv6 = 1000 },
-			totals:  map[client.Family]int64{client.FamilyIPv6: 1500},
-			total:   1500,
-			wantHit: true,
-		},
-		{
-			name:    "IPv6 阈值不应被 IPv4 流量触发",
-			pc:      func(p *config.PolicyConfig) { p.ThresholdIPv6 = 1000 },
-			totals:  map[client.Family]int64{client.FamilyIPv4: 9999},
-			total:   9999,
-			wantHit: false,
-		},
-		{
-			name: "分族与合计同时配置，合计作为兜底",
-			pc: func(p *config.PolicyConfig) {
-				p.ThresholdIPv4 = 5000
-				p.ThresholdTotal = 1000
-			},
-			totals:  map[client.Family]int64{client.FamilyIPv4: 100},
-			total:   2000,
-			wantHit: true,
-		},
-		{
-			name: "分族已触发时合计不再重复计入",
-			pc: func(p *config.PolicyConfig) {
-				p.ThresholdIPv4 = 100
-				p.ThresholdTotal = 10000
-			},
-			totals:  map[client.Family]int64{client.FamilyIPv4: 200},
-			total:   200,
-			wantHit: true,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			pc := basePolicy()
-			pc.ThresholdTotal = 0
-			pc.ThresholdIPv4 = 0
-			pc.ThresholdIPv6 = 0
-			tc.pc(&pc)
-
-			h := newHarness(t, pc)
-
-			// 直接调用 shouldTrigger，避免构造复杂的采样时序
-			rt := h.engine.policies[0]
-			reason, _, _, _ := h.engine.shouldTrigger(context.Background(), rt, tc.total, tc.totals)
-
-			hit := reason != ""
-			if hit != tc.wantHit {
-				t.Errorf("触发 = %v（原因: %q），期望 %v", hit, reason, tc.wantHit)
-			}
-		})
-	}
-}
-
 // TestStatesReflectProgress 验证状态接口暴露的进度信息正确。
 //
 // 面板上的进度条直接读这些字段，算错会让用户误判剩余额度。
 func TestStatesReflectProgress(t *testing.T) {
 	pc := basePolicy()
 	pc.ThresholdTotal = config.Bytes(10000)
-	pc.ThresholdIPv4 = config.Bytes(5000)
-	pc.ThresholdIPv6 = config.Bytes(2000)
 	h := newHarness(t, pc)
 
 	states := h.engine.States()
@@ -256,9 +159,6 @@ func TestStatesReflectProgress(t *testing.T) {
 	}
 	if st.ThresholdTotal != 10000 {
 		t.Errorf("ThresholdTotal = %d", st.ThresholdTotal)
-	}
-	if st.ThresholdIPv4 != 5000 || st.ThresholdIPv6 != 2000 {
-		t.Errorf("分族阈值 = %d/%d", st.ThresholdIPv4, st.ThresholdIPv6)
 	}
 	if st.WindowLabel == "" {
 		t.Error("应提供可读的周期区间描述")
@@ -285,48 +185,14 @@ func TestStatesProgressClamped(t *testing.T) {
 	h.poll()
 
 	st := h.engine.States()[0]
-	if st.ProgressIPv4 < 0 || st.ProgressIPv4 > 1 {
-		t.Errorf("ProgressIPv4 = %v, 应在 [0,1] 内", st.ProgressIPv4)
-	}
 	if st.ProgressTotal < 0 || st.ProgressTotal > 1 {
 		t.Errorf("ProgressTotal = %v, 应在 [0,1] 内", st.ProgressTotal)
-	}
-}
-
-// TestStatesThresholdZeroGivesZeroProgress 验证阈值为 0 时进度为 0 而非除零。
-func TestStatesThresholdZeroGivesZeroProgress(t *testing.T) {
-	pc := basePolicy()
-	pc.ThresholdIPv4 = 0 // 不判断该族
-	h := newHarness(t, pc)
-
-	h.poll()
-	h.cli.addBytes(5000)
-	h.poll()
-
-	st := h.engine.States()[0]
-	if st.ProgressIPv4 != 0 {
-		t.Errorf("阈值为 0 时进度应为 0，实际 %v", st.ProgressIPv4)
 	}
 }
 
 // ---------------------------------------------------------------------------
 // 辅助函数
 // ---------------------------------------------------------------------------
-
-// TestContainsHelper 验证地址族包含判断。
-func TestContainsHelper(t *testing.T) {
-	fams := []client.Family{client.FamilyIPv4, client.FamilyIPv6}
-
-	if !contains(fams, client.FamilyIPv4) {
-		t.Error("应包含 IPv4")
-	}
-	if contains(fams, client.FamilyUnknown) {
-		t.Error("不应包含 Unknown")
-	}
-	if contains(nil, client.FamilyIPv4) {
-		t.Error("空切片不应包含任何元素")
-	}
-}
 
 // TestClamp01 验证归一化函数。
 func TestClamp01(t *testing.T) {
@@ -348,15 +214,9 @@ func TestClamp01(t *testing.T) {
 // TestDescribeLimit 验证限速的人类可读描述。
 func TestDescribeLimit(t *testing.T) {
 	// 全局限速
-	got := describeLimit(client.SpeedLimit{Total: 1 << 20, IPv4: -1, IPv6: -1})
+	got := describeLimit(client.SpeedLimit{Total: 1 << 20})
 	if got == "" {
 		t.Error("描述不应为空")
-	}
-
-	// 分族限速应列出两个族
-	fam := describeLimit(client.SpeedLimit{Total: -1, IPv4: 1000, IPv6: 2000, UseFamily: true})
-	if fam == "" {
-		t.Error("分族描述不应为空")
 	}
 
 	// 0 表示不限速，应能正确表达

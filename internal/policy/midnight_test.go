@@ -39,7 +39,7 @@ func TestWindowRollsWhenProcessRunsAcrossMidnight(t *testing.T) {
 	// 累积一些流量
 	h.cli.addBytes(1 << 20)
 	h.poll()
-	before := h.mon.Aggregate().TotalWindow()
+	before := h.mon.Aggregate().WindowBytes
 	t.Logf("累积后周期量: %d", before)
 
 	// 现在把窗口终点推到过去，模拟「时间已经越过零点」
@@ -48,7 +48,7 @@ func TestWindowRollsWhenProcessRunsAcrossMidnight(t *testing.T) {
 	h.engine.mu.Unlock()
 
 	h.evaluate()
-	after := h.mon.Aggregate().TotalWindow()
+	after := h.mon.Aggregate().WindowBytes
 	t.Logf("跨过零点后周期量: %d", after)
 
 	if after != 0 {
@@ -111,7 +111,7 @@ func TestRepeatedEvaluateDoesNotClearRepeatedly(t *testing.T) {
 	h.poll()
 	h.evaluate()
 
-	got := h.mon.Aggregate().TotalWindow()
+	got := h.mon.Aggregate().WindowBytes
 	t.Logf("连续求值后周期量: %d", got)
 	if got == 0 {
 		t.Error("同一周期内反复求值不应清零累计量")

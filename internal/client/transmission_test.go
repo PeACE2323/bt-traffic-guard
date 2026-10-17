@@ -279,10 +279,7 @@ func TestTransmissionAuthFailureIsClear(t *testing.T) {
 // 限速下发
 // ---------------------------------------------------------------------------
 
-// TestTransmissionSetUploadLimit 验证上传限速下发。
-//
-// 注意单位换算：Transmission 的 session-set 用 KB/s，
-// 而本工具内部统一用字节/秒。换算错误会导致限速值差 1000 倍。
+// TestTransmissionSetUploadLimit 验证限速下发与读回。
 func TestTransmissionSetUploadLimit(t *testing.T) {
 	stub := newTRStub()
 	srv := httptest.NewServer(stub.handler())
@@ -294,7 +291,7 @@ func TestTransmissionSetUploadLimit(t *testing.T) {
 
 	// 下发 1 MiB/s = 1048576 B/s，应换算为 1049 KB/s（向上取整）
 	if err := c.SetUploadLimit(context.Background(), SpeedLimit{
-		Total: 1048576, IPv4: -1, IPv6: -1,
+		Total: 1048576,
 	}); err != nil {
 		t.Fatalf("下发限速失败: %v", err)
 	}
@@ -335,29 +332,6 @@ func TestTransmissionUnlimitedClears(t *testing.T) {
 	}
 }
 
-// TestTransmissionFamilyLimitFallsBackToTotal 验证分族限速在 Transmission 上
-// 合理回落：它不支持分族，应取两个值中较宽松的一个，避免误伤。
-func TestTransmissionFamilyLimitFallsBackToTotal(t *testing.T) {
-	stub := newTRStub()
-	srv := httptest.NewServer(stub.handler())
-	defer srv.Close()
-
-	c := NewTransmission(Options{
-		Name: "tr", Type: "transmission", URL: srv.URL, Timeout: 5 * time.Second,
-	})
-
-	// IPv4=1000 B/s，IPv6=5000 B/s -> 收紧到较宽松的 5000 B/s（向上取整为 5 KB/s）
-	err := c.SetUploadLimit(context.Background(), SpeedLimit{
-		Total: -1, IPv4: 1000, IPv6: 5000, UseFamily: true,
-	})
-	if err != nil {
-		t.Fatalf("下发失败: %v", err)
-	}
-	if stub.upLimitKB != 5 {
-		t.Errorf("回落值 = %d KB/s, 期望 5（取较宽松的 5000 B/s）", stub.upLimitKB)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // 数据解析
 // ---------------------------------------------------------------------------
@@ -386,10 +360,6 @@ func TestTransmissionFetchParsesStats(t *testing.T) {
 	}
 	if st.DlSpeed != 1024 {
 		t.Errorf("下载速度 = %d, 期望 1024", st.DlSpeed)
-	}
-	// Transmission 不支持分族限速，必须如实上报
-	if st.SupportsFamilyLimit {
-		t.Error("Transmission 不应声称支持分族限速")
 	}
 }
 

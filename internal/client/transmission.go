@@ -293,14 +293,13 @@ func (t *Transmission) Fetch(ctx context.Context) (Stats, error) {
 	}
 
 	st := Stats{
-		Timestamp:           time.Now(),
-		UpSpeed:             map[Family]int64{},
-		UpTotal:             map[Family]int64{},
-		DlSpeed:             stats.DownloadSpeed,
-		TorrentCount:        stats.TorrentCount,
-		SpeedLimited:        sess.SpeedLimitUpEnabled || sess.AltSpeedEnabled,
-		CurrentUpLimit:      upLimit,
-		SupportsFamilyLimit: false, // Transmission 无分族限速能力
+		Timestamp:      time.Now(),
+		UpSpeed:        stats.UploadSpeed,
+		UpTotal:        stats.CumulativeStats.UploadedBytes,
+		DlSpeed:        stats.DownloadSpeed,
+		TorrentCount:   stats.TorrentCount,
+		SpeedLimited:   sess.SpeedLimitUpEnabled || sess.AltSpeedEnabled,
+		CurrentUpLimit: upLimit,
 		Raw: map[string]any{
 			"version":          sess.Version,
 			"speed_limit_up":   sess.SpeedLimitUp,
@@ -309,70 +308,21 @@ func (t *Transmission) Fetch(ctx context.Context) (Stats, error) {
 		},
 	}
 
-	// 分族归因
-	v4, v6, peers := t.splitByFamily(ctx)
-	st.PeerCount = peers
-
-	// 这一轮没有可用的 peer 明细（保种空闲）时，
-	// 沿用最近一次的有效比例，避免流量被反复记成「未分类」。
-	t.famMtx.Lock()
-	if v4+v6 > 0 {
-		t.lastV4, t.lastV6 = v4, v6
-		t.lastFamAt = time.Now()
-	} else if t.lastV4+t.lastV6 > 0 {
-		// 只在缓存仍然较新时沿用，太久以前的分布没有参考价值。
-		if time.Since(t.lastFamAt) < 30*time.Minute {
-			v4, v6 = t.lastV4, t.lastV6
-		}
-	}
-	t.famMtx.Unlock()
-
-	totalSpeed := stats.UploadSpeed
-	totalData := stats.CumulativeStats.UploadedBytes
-
-	// 说明：Transmission 只提供【不分族】的累计上传量，
-	// 分族数字是按当前 peer 的地址族占比「估算」出来的。
-	//
-	// 这带来一个必须显式标注的重要性质：
-	//   估算值【不是单调递增的计数器】——
-	//   IPv6 peer 断开时，IPv4 那一份会被重新分摊而【变小】。
-	//
-	// 而 monitor 判断「客户端是否重启」的依据正是「上报值是否变小」，
-	// 若不告知它这是估算值，就会被误判为重启，
-	// 随后数值回升时把整段差值当成新增流量，
-	// 每次波动凭空灌入几百 GB（用户实测出现过 2 TB 的虚假累计）。
-	//
-	// 因此这里标记 FamilyTotalEstimated，
-	// 让 monitor 对分族量一律走「速率积分」而非「累计量差值」。
-	st.FamilyTotalEstimated = true
-
-	if v4+v6 > 0 && (v4 > 0 || v6 > 0) {
-		// 有 peer 明细：按连接数占比分摊速度，按占比分摊累计量。
-		sum := v4 + v6
-		if sum > 0 {
-			sp4 := totalSpeed * v4 / sum
-			sp6 := totalSpeed - sp4
-			st.UpSpeed[FamilyIPv4] = sp4
-			st.UpSpeed[FamilyIPv6] = sp6
-			st.UpTotal[FamilyIPv4] = totalData * v4 / sum
-			st.UpTotal[FamilyIPv6] = totalData * v6 / sum
-		}
-	} else {
-		// 无明细：全部计入 unknown。
-		st.UpSpeed[FamilyUnknown] = totalSpeed
-		st.UpTotal[FamilyUnknown] = totalData
+	// peer 连接数只用于展示。地址族统计已移除：
+	// Transmission 不提供分族的累计量，只能按当前 peer 占比估算，
+	// 而估算值会随 peer 增减跳动，导致虚假流量。
+	if _, _, peers := t.splitByFamily(ctx); true {
+		st.PeerCount = peers
 	}
 
 	return st, nil
 }
 
-// splitByFamily 统计连接中的 peer 地址族数量。
-// 返回 (ipv4 peer 数, ipv6 peer 数, 总 peer 数)。
+// splitByFamily 统计当前已连接的 peer 数量。
 //
-// 说明：Transmission 只返回【当前已连接】的 peer 明细。
-// PT 保种时上传大多是空闲的，此刻 peers 常常为空，
-// 于是地址族比例无从判断。
-// 为避免「一空闲就退回未分类」，调用方会缓存上一次有效的比例继续沿用（见 Fetch）。
+// 返回 (unused v4 计数, unused v6 计数, 总 peer 数)。
+// 地址族计数保留为 0 仅为兼容既有调用签名，已不再参与统计 ——
+// 本工具现在只统计总上传量。
 func (t *Transmission) splitByFamily(ctx context.Context) (int64, int64, int) {
 	args := map[string]any{
 		"fields": []string{"id", "peers", "peersFrom", "rateUpload", "uploadedEver"},
@@ -382,20 +332,11 @@ func (t *Transmission) splitByFamily(ctx context.Context) (int64, int64, int) {
 		return 0, 0, 0
 	}
 
-	var v4, v6 int64
 	total := 0
 	for _, tr := range res.Torrents {
-		for _, p := range tr.Peers {
-			total++
-			switch classifyIP(p.Address) {
-			case FamilyIPv4:
-				v4++
-			case FamilyIPv6:
-				v6++
-			}
-		}
+		total += len(tr.Peers)
 	}
-	return v4, v6, total
+	return 0, 0, total
 }
 
 // ---------------------------------------------------------------------------
@@ -404,26 +345,13 @@ func (t *Transmission) splitByFamily(ctx context.Context) (int64, int64, int) {
 
 // SetUploadLimit 下发上传限速。
 //
-// Transmission 只有单一的全局上传限速（speed-limit-up，单位 KB/s），
-// 不支持 IPv4/IPv6 分开限速。因此：
-//   - 若只设置了 Total，直接用 Total；
-//   - 若设置了分族值，取两者中较大的一个（宽松优先，避免误伤）；
-//     Transmission 场景下建议在策略里直接使用 limit_total。
+// Transmission 只有单一的全局上传限速（speed-limit-up，单位 KB/s）。
 //
-// limit.Total == 0 表示关闭上传限速。
+// limit.Total == 0 表示关闭上传限速，-1 表示不修改。
 func (t *Transmission) SetUploadLimit(ctx context.Context, limit SpeedLimit) error {
 	value := limit.Total
 	if value < 0 {
-		switch {
-		case limit.IPv4 >= 0 && limit.IPv6 >= 0:
-			value = maxInt64(limit.IPv4, limit.IPv6)
-		case limit.IPv4 >= 0:
-			value = limit.IPv4
-		case limit.IPv6 >= 0:
-			value = limit.IPv6
-		default:
-			return nil
-		}
+		return nil
 	}
 
 	// Transmission 限速单位为 KB/s。向上取整，保证不超过指定字节速率。
@@ -440,6 +368,6 @@ func (t *Transmission) SetUploadLimit(ctx context.Context, limit SpeedLimit) err
 		return fmt.Errorf("设置 Transmission 上传限速失败: %w", err)
 	}
 
-	t.tracker.record(SpeedLimit{Total: value, IPv4: limit.IPv4, IPv6: limit.IPv6})
+	t.tracker.record(SpeedLimit{Total: value})
 	return nil
 }

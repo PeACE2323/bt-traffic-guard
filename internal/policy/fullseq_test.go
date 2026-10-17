@@ -38,7 +38,7 @@ func TestAccumulateAcrossMidnightThenRoll(t *testing.T) {
 	_ = now
 	h.evaluate()
 
-	before := h.mon.Aggregate().TotalWindow()
+	before := h.mon.Aggregate().WindowBytes
 	t.Logf("第 1 天累计: %d 字节 (%.2f GiB)", before, float64(before)/(1<<30))
 	if before == 0 {
 		t.Fatal("前置条件：应已累积")
@@ -63,7 +63,7 @@ func TestAccumulateAcrossMidnightThenRoll(t *testing.T) {
 	h.evaluate()
 
 	// --- 第 4 步：检查 ---
-	after := h.mon.Aggregate().TotalWindow()
+	after := h.mon.Aggregate().WindowBytes
 	t.Logf("第 2 天周期累计: %d 字节 (%.2f GiB)", after, float64(after)/(1<<30))
 
 	h.engine.mu.Lock()
